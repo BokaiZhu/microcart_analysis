@@ -11,9 +11,9 @@ The following is an overview of the code in this repository. Please note that si
 | File Name | Description |
 | :---------- | :---------- |
 | fig2_related | Archived code related to designing 16s probes for bacteria. Updated package can be checked [here](https://github.com/BokaiZhu/microbiomeFISH).   |
-| fig3_related | Archived code for Figure 3 (and related supplementary figures) in manuscript (MIBI-related).            |
-| fig4_related | Archived code for Figure 4 (and related supplementary figures) in manuscript (GeoMx-DSP-related).           |
-| fig5_related | Archived code for Figure 5 (and related supplementary figures) in manuscript (MALDI-related). |
-| fig6_related | Archived code for Figure 6 (and related supplementary figures) in manuscript (Macrophage-related). |
-| fig7_related | Archived code for Figure 7 (and related supplementary figures) in manuscript (Trimodal-related). |
+| fig3_related | Archived code for Figure 3 (and related supp. figures) in manuscript (MIBI-related).            |
+| fig4_related | Archived code for Figure 4 (and related supp. figures) in manuscript (GeoMx-DSP-related).           |
+| fig5_related | Archived code for Figure 5 (and related supp. figures) in manuscript (MALDI-related). |
+| fig6_related | Archived code for Figure 6 (and related supp. figures) in manuscript (Macrophage-related). |
+| fig7_related | Archived code for Figure 7 (and related supp. figures) in manuscript (Trimodal-related). |
 
