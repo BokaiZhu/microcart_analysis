@@ -1,0 +1,810 @@
+---
+title: "DEG_host"
+output: html_document
+---
+
+Code specific for GeoMx dsp data generation and related analysis
+
+Input of this script is the 'geomxnspipeline' results from nanostring (.dcc files etc).
+Out put of this script is dataframe table of gene level counts, and related analysis in figure 4.
+
+```{r}
+library(NanoStringNCTools)
+library(GeomxTools)
+library(GeoMxWorkflows)
+```
+
+```{r}
+DCCFiles <- dir('../final_data/b1/DCC-20230323/', pattern = ".dcc$",
+                full.names = TRUE, recursive = TRUE)
+PKCFiles <- dir('../final_data/pkc/', pattern = ".pkc$",
+                full.names = TRUE, recursive = TRUE)
+#PKCFiles = '../final_data/pkc/microMIBI_DSP_SU_HU_Q-27900_v1.0.pkc'
+
+SampleAnnotationFile <- '../final_data/bokai-mico-1_20230210T0155_LabWorksheet.xlsx'
+
+microdsp <-
+    readNanoStringGeoMxSet(dccFiles = DCCFiles,
+                           pkcFiles = PKCFiles,
+                           phenoDataFile = SampleAnnotationFile,
+                           phenoDataSheet = "bokai-mico-1_20230210T0155_LabW",
+                           phenoDataDccColName = "Sample_ID",
+                           protocolDataColNames = c("aoi", "roi"),
+                           experimentDataColNames = c("panel"))
+```
+
+Standard processing as described in geomxtool tutorial.
+
+```{r}
+library(knitr)
+pkcs <- annotation(microdsp)
+modules <- gsub(".pkc", "", pkcs)
+
+# shift count + 1
+microdsp <- shiftCountsOne(microdsp, useDALogic = TRUE)
+
+# Default QC cutoffs are commented in () adjacent to the respective parameters
+# study-specific values were selected after visualizing the QC results in more
+# detail below
+QC_params <-
+    list(minSegmentReads = 1000, # Minimum number of reads (1000)
+         percentTrimmed = 80,    # Minimum % of reads trimmed (80%)
+         percentStitched = 80,   # Minimum % of reads stitched (80%)
+         percentAligned = 75,    # Minimum % of reads aligned (80%)
+         percentSaturation = 50, # Minimum sequencing saturation (50%)
+         minNegativeCount = 1,   # Minimum negative control counts (10)
+         maxNTCCount = 9000,     # Maximum counts observed in NTC well (1000)
+         minNuclei = 20,         # Minimum # of nuclei estimated (100)
+         minArea = 1000)         # Minimum segment area (5000)
+microdsp <-
+    setSegmentQCFlags(microdsp, 
+                      qcCutoffs = QC_params)        
+
+# Collate QC Results
+QCResults <- protocolData(microdsp)[["QCFlags"]]
+flag_columns <- colnames(QCResults)
+QC_Summary <- data.frame(Pass = colSums(!QCResults[, flag_columns]),
+                         Warning = colSums(QCResults[, flag_columns]))
+QCResults$QCStatus <- apply(QCResults, 1L, function(x) {
+    ifelse(sum(x) == 0L, "PASS", "WARNING")
+})
+QC_Summary["TOTAL FLAGS", ] <-
+    c(sum(QCResults[, "QCStatus"] == "PASS"),
+      sum(QCResults[, "QCStatus"] == "WARNING"))
+
+####### viz the qc 
+
+library(ggplot2)
+
+col_by <- "segment"
+
+# Graphical summaries of QC statistics plot function
+QC_histogram <- function(assay_data = NULL,
+                         annotation = NULL,
+                         fill_by = NULL,
+                         thr = NULL,
+                         scale_trans = NULL) {
+    plt <- ggplot(assay_data,
+                  aes_string(x = paste0("unlist(`", annotation, "`)"),
+                             fill = fill_by)) +
+        geom_histogram(bins = 50) +
+        geom_vline(xintercept = thr, lty = "dashed", color = "black") +
+        theme_bw() + guides(fill = "none") +
+        facet_wrap(as.formula(paste("~", fill_by)), nrow = 4) +
+        labs(x = annotation, y = "Segments, #", title = annotation)
+    if(!is.null(scale_trans)) {
+        plt <- plt +
+            scale_x_continuous(trans = scale_trans)
+    }
+    plt
+}
+
+# calculate the negative geometric means for each module
+negativeGeoMeans <- 
+    esBy(negativeControlSubset(microdsp), 
+         GROUP = "Module", 
+         FUN = function(x) { 
+             assayDataApply(x, MARGIN = 2, FUN = ngeoMean, elt = "exprs") 
+         }) 
+protocolData(microdsp)[["NegGeoMean"]] <- negativeGeoMeans
+
+# explicitly copy the Negative geoMeans from sData to pData
+negCols <- paste0("NegGeoMean_", modules)
+pData(microdsp)[, negCols] <- sData(microdsp)[["NegGeoMean"]]
+for(ann in negCols) {
+    plt <- QC_histogram(pData(microdsp), ann, col_by, 2, scale_trans = "log10")
+    print(plt)
+}
+
+# detatch neg_geomean columns ahead of aggregateCounts call
+pData(microdsp) <- pData(microdsp)[, !colnames(pData(microdsp)) %in% negCols]
+
+# Generally keep the qcCutoffs parameters unchanged. Set removeLocalOutliers to 
+# FALSE if you do not want to remove local outliers
+microdsp <- setBioProbeQCFlags(microdsp, 
+                               qcCutoffs = list(minProbeRatio = 0.1,
+                                                percentFailGrubbs = 20), 
+                               removeLocalOutliers = TRUE)
+
+ProbeQCResults <- fData(microdsp)[["QCFlags"]]
+
+# Define QC table for Probe QC
+qc_df <- data.frame(Passed = sum(rowSums(ProbeQCResults[, -1]) == 0),
+                    Global = sum(ProbeQCResults$GlobalGrubbsOutlier),
+                    Local = sum(rowSums(ProbeQCResults[, -2:-1]) > 0
+                                & !ProbeQCResults$GlobalGrubbsOutlier))
+
+#Subset object to exclude all that did not pass Ratio & Global testing
+ProbeQCPassed <- 
+    subset(microdsp, 
+           fData(microdsp)[["QCFlags"]][,c("LowProbeRatio")] == FALSE &
+               fData(microdsp)[["QCFlags"]][,c("GlobalGrubbsOutlier")] == FALSE)
+dim(ProbeQCPassed)
+microdsp <- ProbeQCPassed # no feature deleted
+
+# collapse to targets
+target_microdsp <- aggregateCounts(microdsp)
+dim(target_microdsp)
+
+microdsp_counts = exprs(target_microdsp)
+
+# Define LOQ SD threshold and minimum value
+cutoff <- 2
+minLOQ <- 2
+
+# Calculate LOQ per module tested
+LOQ <- data.frame(row.names = colnames(target_microdsp))
+for(module in modules) {
+    vars <- paste0(c("NegGeoMean_", "NegGeoSD_"),
+                   module)
+    if(all(vars[1:2] %in% colnames(pData(target_microdsp)))) {
+        LOQ[, module] <-
+            pmax(minLOQ,
+                 pData(target_microdsp)[, vars[1]] * 
+                     pData(target_microdsp)[, vars[2]] ^ cutoff)
+    }
+}
+pData(target_microdsp)$LOQ <- LOQ
+
+### filtering
+LOQ_Mat <- c()
+for(module in modules) {
+    ind <- fData(target_microdsp)$Module == module
+    Mat_i <- t(esApply(target_microdsp[ind, ], MARGIN = 1,
+                       FUN = function(x) {
+                           x > LOQ[, module]
+                       }))
+    LOQ_Mat <- rbind(LOQ_Mat, Mat_i)
+}
+# ensure ordering since this is stored outside of the geomxSet
+LOQ_Mat <- LOQ_Mat[fData(target_microdsp)$TargetName, ]
+
+## gene detection
+
+# Save detection rate information to pheno data
+pData(target_microdsp)$GenesDetected <- 
+    colSums(LOQ_Mat, na.rm = TRUE)
+pData(target_microdsp)$GeneDetectionRate <-
+    pData(target_microdsp)$GenesDetected / nrow(target_microdsp)
+
+# Determine detection thresholds: 1%, 5%, 10%, 15%, >15%
+pData(target_microdsp)$DetectionThreshold <- 
+    cut(pData(target_microdsp)$GeneDetectionRate,
+        breaks = c(0, 0.01, 0.05, 0.1, 0.15, 1),
+        labels = c("<1%", "1-5%", "5-10%", "10-15%", ">15%"))
+
+library(scales) # for percent
+
+# Calculate detection rate:
+LOQ_Mat <- LOQ_Mat[, colnames(target_microdsp)]
+fData(target_microdsp)$DetectedSegments <- rowSums(LOQ_Mat, na.rm = TRUE)
+fData(target_microdsp)$DetectionRate <-
+    fData(target_microdsp)$DetectedSegments / nrow(pData(target_microdsp))
+
+
+## viz low perc gene and filter out for dwonstream analysis
+# Plot detection rate:
+plot_detect <- data.frame(Freq = c(1, 5, 10, 20, 30, 50))
+plot_detect$Number <-
+    unlist(lapply(c(0.01, 0.05, 0.1, 0.2, 0.3, 0.5),
+                  function(x) {sum(fData(target_microdsp)$DetectionRate >= x)}))
+plot_detect$Rate <- plot_detect$Number / nrow(fData(target_microdsp))
+rownames(plot_detect) <- plot_detect$Freq
+
+# Subset to target genes detected in at least 10% of the samples.
+#   Also manually include the negative control probe, for downstream use
+negativeProbefData <- subset(fData(target_microdsp), CodeClass == "Negative")
+neg_probes <- unique(negativeProbefData$TargetName)
+target_microdsp <- 
+    target_microdsp[fData(target_microdsp)$DetectionRate >= 0.01 |
+                        fData(target_microdsp)$TargetName %in% neg_probes, ]
+
+library(reshape2)  # for melt
+library(cowplot)   # for plot_grid
+
+# Graph Q3 value vs negGeoMean of Negatives
+ann_of_interest <- "segment"
+Stat_data <- 
+    data.frame(row.names = colnames(exprs(target_microdsp)),
+               Segment = colnames(exprs(target_microdsp)),
+               Annotation = pData(target_microdsp)[, ann_of_interest],
+               Q3 = unlist(apply(exprs(target_microdsp), 2,
+                                 quantile, 0.75, na.rm = TRUE)),
+               NegProbe = exprs(target_microdsp)["NegProbe-WTX", ])
+
+Stat_data_m <- melt(Stat_data, measure.vars = c("Q3", "NegProbe"),
+                    variable.name = "Statistic", value.name = "Value")
+
+target_microdsp <- normalize(target_microdsp ,
+                             norm_method = "quant", 
+                             desiredQuantile = .75,
+                             toElt = "q_norm")
+```
+
+
+###### processing finished. also save out normalized counts from here.
+
+
+##### start DEG analysis on host regions
+
+
+```{r}
+# need some reformatting of the object
+#target_microdsp
+
+sampname = gsub('.dcc', '',colnames(target_microdsp))
+## read in meta data (from nanostring)
+meta = read.table("../final_data/meta_analys_use.txt", sep = '\t', header = T, na.strings=c("","NA"))
+## need to remove some samples since no coutns somehow
+meta = meta[meta$Sample_ID %in% sampname,]
+sampnametarget = meta$Sample_ID[meta$slide.name != '0117-BCR' & # remove ROIs from Bacteria TMA
+                                  meta$segment != 'Full ROI' & # remove ROIs of fecal regions
+                                  meta$slide.name != 'No Template Control']# remove neg control samples
+meta_host = meta[meta$slide.name != '0117-BCR' &
+                                  meta$segment != 'Full ROI' &
+                                  meta$slide.name != 'No Template Control',]# sample names for wta analysis
+meta_host$treatment = substr(meta_host$tag2, 0, 1)
+
+target_microdsp_host = target_microdsp[,match(sampnametarget, sampname)]
+########################
+```
+
+
+Produce volcano plots.........
+
+
+```{r}
+# read in the small and large information
+library(dplyr)
+library(tidyr)
+
+meta_mibi = read.csv('../../../meta_link/meta_mibi_dsp.csv') # onther csv with meta information
+meta_mibi_temp = meta_mibi[,c("location", "DSP_Ecad_name", "DSP_CD45_name", "DSP_Bac_name")]
+region2dsp = melt(meta_mibi_temp, id.vars=c("location"),var='DSP_name')
+region2dsp = region2dsp[region2dsp$value != '',]
+
+# first small intestine
+sampnametarget = meta$Sample_ID[meta$slide.name != '0117-BCR' &
+                                  meta$segment != 'Full ROI' &
+                                  meta$slide.name != 'No Template Control']# sample names for wta analysis
+smll = region2dsp$value[region2dsp$location == 'Small']
+sampnametarget = sampnametarget[sampnametarget %in% smll] # rois for small intestine
+
+meta_host$treatment = substr(meta_host$tag2, 0, 1)
+target_microdsp_host = target_microdsp[,match(sampnametarget, sampname)]
+
+## prep deg process
+pData(target_microdsp_host)$testClass <- # control and treatment group to compare (diseased)
+    factor( meta_host$treatment[match(sampnametarget, meta_host$Sample_ID)], c("T", "C"))
+
+pData(target_microdsp_host)[["slide"]] <- # compare across slides, so set set slide as intercept too
+    factor(pData(target_microdsp_host)[["slide name"]])
+
+assayDataElement(object = target_microdsp_host, elt = "log_q") <- # log norm counts as suggested
+    assayDataApply(target_microdsp_host, 2, FUN = log, base = 2, elt = "q_norm")
+
+########## deg process
+results2 <- c()
+for(region in c("CD45", "Ecad")) {
+    ind <- pData(target_microdsp_host)$segment == region
+    mixedOutmc <-
+        mixedModelDE(target_microdsp_host[, ind],
+                     elt = "log_q",
+                     modelFormula = ~ testClass + (1 | slide),
+                     groupVar = "testClass",
+                     nCores = parallel::detectCores(),
+                     multiCore = FALSE)
+    
+    # format results as data.frame
+    r_test <- do.call(rbind, mixedOutmc["lsmeans", ])
+    tests <- rownames(r_test)
+    r_test <- as.data.frame(r_test)
+    r_test$Contrast <- tests
+    
+    # use lapply in case you have multiple levels of your test factor to
+    # correctly associate gene name with it's row in the results table
+    r_test$Gene <- 
+        unlist(lapply(colnames(mixedOutmc),
+                      rep, nrow(mixedOutmc["lsmeans", ][[1]])))
+    r_test$Subset <- region
+    r_test$FDR <- p.adjust(r_test$`Pr(>|t|)`, method = "fdr")
+    r_test <- r_test[, c("Gene", "Subset", "Contrast", "Estimate", 
+                         "Pr(>|t|)", "FDR")]
+    results2 <- rbind(results2, r_test)
+}
+
+results = results2
+results = subset(results, !(results$Gene %in% c("PAN", "Pro", "Firm", "Bac")))
+write.csv(results, '../results/DEG_small_0818.csv')
+
+
+
+# cd45 in small intestine
+results = subset(results, results$Subset == 'CD45')
+results$Estimate = -1 * results$Estimate # reverse direction
+results$Color <- "NS or FC < 0.5"
+results$Color[results$`Pr(>|t|)` < 0.05] <- "P < 0.05"
+results$Color[((results$Estimate) < -0.5) & (results$`Pr(>|t|)` < 0.05)] <- "FC < -0.5"
+results$Color[((results$Estimate) > 0.5) & (results$`Pr(>|t|)` < 0.05)] <- "FC > 0.5"
+results$Color <- factor(results$Color,
+                        levels = c("NS or FC < 0.5", "P < 0.05",
+                                   "FC < -0.5", "FC > 0.5"))
+
+# pick top genes for either side of volcano to label
+# order genes for convenience:
+results$invert_P <- (-log10(results$`Pr(>|t|)`)) * sign(results$Estimate)
+top_g <- c()
+for(cond in c("CD45")) {
+    ind <- results$Subset == cond
+    top_g <- c(top_g,
+               results[ind, 'Gene'][
+                   order(results[ind, 'Estimate'], decreasing = TRUE)[1:15]],
+               results[ind, 'Gene'][
+                   order(results[ind, 'Estimate'], decreasing = FALSE)[1:15]])
+}
+top_g <- unique(top_g)
+results <- results[, -1*ncol(results)] # remove invert_P from matrix
+
+# Graph results
+p = ggplot(results,
+       aes(x = Estimate, y = -log10(`Pr(>|t|)`),
+           color = Color, label = Gene)) +
+    geom_vline(xintercept = c(0.5, -0.5), lty = "dashed", lwd = 0.25) +
+    geom_hline(yintercept = -log10(0.05), lty = "dashed", lwd = 0.25) +
+    geom_point(size = 0.25) +
+    labs(x = "Enriched in contrl <- log2(FC) -> Enriched in colitis",
+         y = "Significance, -log10(P)",
+         color = "Significance") +
+    scale_color_manual(values = c(`FC > 0.5` = "firebrick1",     
+                                  `FC < -0.5` = "royalblue2",
+                                  `P < 0.05` = "orange2",
+                                  `NS or FC < 1` = "gray"),
+                       guide = guide_legend(override.aes = list(size = 2))) +
+    scale_y_continuous(expand = expansion(mult = c(0,0.05))) +
+    ggrepel::geom_text_repel(data = subset(results, Gene %in% top_g & results$`Pr(>|t|)` < 0.05),
+                    size = 2.5, point.padding = 0.15, color = "black",
+                    min.segment.length = .1, box.padding = .2, lwd = 0.25, segment.size = 0.25,
+                    max.overlaps = 100) +
+    theme_classic(base_size = 4) +
+    theme(legend.position = "bottom") +
+    facet_wrap(~Subset, scales = "free_y")
+#ggsave('../plots/wta_volcano_small_cd45_debug.png', height = 6, width = 7.2)
+#ggsave('../plots/wta_volcano_small_cd45_debug.svg', height = 3, width = 3.6)
+p
+
+
+results = results2
+results = subset(results, !(results$Gene %in% c("PAN", "Pro", "Firm", "Bac")))
+
+# cd45 in small intestine
+results = subset(results, results$Subset == 'Ecad')
+results$Estimate = -1 * results$Estimate # reverse direction
+results$Color <- "NS or FC < 0.5"
+results$Color[results$`Pr(>|t|)` < 0.05] <- "P < 0.05"
+results$Color[((results$Estimate) < -0.5) & (results$`Pr(>|t|)` < 0.05)] <- "FC < -0.5"
+results$Color[((results$Estimate) > 0.5) & (results$`Pr(>|t|)` < 0.05)] <- "FC > 0.5"
+results$Color <- factor(results$Color,
+                        levels = c("NS or FC < 0.5", "P < 0.05",
+                                   "FC < -0.5", "FC > 0.5"))
+
+# pick top genes for either side of volcano to label
+# order genes for convenience:
+results$invert_P <- (-log10(results$`Pr(>|t|)`)) * sign(results$Estimate)
+top_g <- c()
+for(cond in c("Ecad")) {
+    ind <- results$Subset == cond
+    top_g <- c(top_g,
+               results[ind, 'Gene'][
+                   order(results[ind, 'Estimate'], decreasing = TRUE)[1:15]],
+               results[ind, 'Gene'][
+                   order(results[ind, 'Estimate'], decreasing = FALSE)[1:15]])
+}
+top_g <- unique(top_g)
+results <- results[, -1*ncol(results)] # remove invert_P from matrix
+
+# Graph results
+p = ggplot(results,
+       aes(x = Estimate, y = -log10(`Pr(>|t|)`),
+           color = Color, label = Gene)) +
+    geom_vline(xintercept = c(0.5, -0.5), lty = "dashed", lwd = 0.25) +
+    geom_hline(yintercept = -log10(0.05), lty = "dashed", lwd = 0.25) +
+    geom_point(size = 0.25) +
+    labs(x = "Enriched in contrl <- log2(FC) -> Enriched in colitis",
+         y = "Significance, -log10(P)",
+         color = "Significance") +
+    scale_color_manual(values = c(`FC > 0.5` = "firebrick1",
+                                  `FC < -0.5` = "royalblue2",
+                                  `P < 0.05` = "orange2",
+                                  `NS or FC < 1` = "gray"),
+                       guide = guide_legend(override.aes = list(size = 2))) +
+    scale_y_continuous(expand = expansion(mult = c(0,0.05))) +
+    ggrepel::geom_text_repel(data = subset(results, Gene %in% top_g & results$`Pr(>|t|)` < 0.05),
+                    size = 2.5, point.padding = 0.15, color = "black",
+                    min.segment.length = .1, box.padding = .2, lwd = 0.25, segment.size = 0.25,
+                    max.overlaps = 100) +
+    theme_classic(base_size = 4) +
+    theme(legend.position = "bottom") +
+    facet_wrap(~Subset, scales = "free_y")
+#ggsave('../plots/wta_volcano_small_ecad_debug.png', height = 6, width = 7.2)
+#ggsave('../plots/wta_volcano_small_ecad_debug.svg', height = 3, width = 3.6)
+p
+
+
+########################################### large intestine version
+
+
+# read in the small and large information
+library(dplyr)
+library(tidyr)
+
+meta_mibi = read.csv('../../../meta_link/meta_mibi_dsp.csv')
+meta_mibi_temp = meta_mibi[,c("location", "DSP_Ecad_name", "DSP_CD45_name", "DSP_Bac_name")]
+region2dsp = melt(meta_mibi_temp, id.vars=c("location"),var='DSP_name')
+region2dsp = region2dsp[region2dsp$value != '',]
+
+# first large intestine
+sampnametarget = meta$Sample_ID[meta$slide.name != '0117-BCR' &
+                                  meta$segment != 'Full ROI' &
+                                  meta$slide.name != 'No Template Control']# sample names for wta analysis
+large = region2dsp$value[region2dsp$location == 'Large']
+sampnametarget = sampnametarget[sampnametarget %in% large] # rois for large intestine
+
+meta_host$treatment = substr(meta_host$tag2, 0, 1)
+target_microdsp_host = target_microdsp[,match(sampnametarget, sampname)]
+
+## prep deg process
+pData(target_microdsp_host)$testClass <- # control and treatment group to compare (diseased)
+    factor( meta_host$treatment[match(sampnametarget, meta_host$Sample_ID)], c("T", "C"))
+
+pData(target_microdsp_host)[["slide"]] <- # compare across slides, so set set slide as intercept too
+    factor(pData(target_microdsp_host)[["slide name"]])
+
+assayDataElement(object = target_microdsp_host, elt = "log_q") <- # log norm counts as suggested
+    assayDataApply(target_microdsp_host, 2, FUN = log, base = 2, elt = "q_norm")
+
+########## deg process
+results2 <- c()
+for(region in c("CD45", "Ecad")) {
+    ind <- pData(target_microdsp_host)$segment == region
+    mixedOutmc <-
+        mixedModelDE(target_microdsp_host[, ind],
+                     elt = "log_q",
+                     modelFormula = ~ testClass + (1 | slide),
+                     groupVar = "testClass",
+                     nCores = parallel::detectCores(),
+                     multiCore = FALSE)
+    
+    # format results as data.frame
+    r_test <- do.call(rbind, mixedOutmc["lsmeans", ])
+    tests <- rownames(r_test)
+    r_test <- as.data.frame(r_test)
+    r_test$Contrast <- tests
+    
+    # use lapply in case you have multiple levels of your test factor to
+    # correctly associate gene name with it's row in the results table
+    r_test$Gene <- 
+        unlist(lapply(colnames(mixedOutmc),
+                      rep, nrow(mixedOutmc["lsmeans", ][[1]])))
+    r_test$Subset <- region
+    r_test$FDR <- p.adjust(r_test$`Pr(>|t|)`, method = "fdr")
+    r_test <- r_test[, c("Gene", "Subset", "Contrast", "Estimate", 
+                         "Pr(>|t|)", "FDR")]
+    results2 <- rbind(results2, r_test)
+}
+
+################## plotting
+
+results = results2
+results = subset(results, !(results$Gene %in% c("PAN", "Pro", "Firm", "Bac")))
+write.csv(results, '../results/DEG_large_0818.csv')
+
+####
+
+# cd45 in small intestine
+results = subset(results, results$Subset == 'CD45')
+results$Estimate = -1 * results$Estimate # reverse direction
+results$Color <- "NS or FC < 0.5"
+results$Color[results$`Pr(>|t|)` < 0.05] <- "P < 0.05"
+results$Color[((results$Estimate) < -0.5) & (results$`Pr(>|t|)` < 0.05)] <- "FC < -0.5"
+results$Color[((results$Estimate) > 0.5) & (results$`Pr(>|t|)` < 0.05)] <- "FC > 0.5"
+results$Color <- factor(results$Color,
+                        levels = c("NS or FC < 0.5", "P < 0.05",
+                                   "FC < -0.5", "FC > 0.5"))
+
+# pick top genes for either side of volcano to label
+# order genes for convenience:
+results$invert_P <- (-log10(results$`Pr(>|t|)`)) * sign(results$Estimate)
+top_g <- c()
+for(cond in c("CD45")) {
+    ind <- results$Subset == cond
+    top_g <- c(top_g,
+               results[ind, 'Gene'][
+                   order(results[ind, 'Estimate'], decreasing = TRUE)[1:15]],
+               results[ind, 'Gene'][
+                   order(results[ind, 'Estimate'], decreasing = FALSE)[1:15]])
+}
+top_g <- unique(top_g)
+results <- results[, -1*ncol(results)] # remove invert_P from matrix
+
+# Graph results
+p = ggplot(results,
+       aes(x = Estimate, y = -log10(`Pr(>|t|)`),
+           color = Color, label = Gene)) +
+    geom_vline(xintercept = c(0.5, -0.5), lty = "dashed", lwd = 0.25) +
+    geom_hline(yintercept = -log10(0.05), lty = "dashed", lwd = 0.25) +
+    geom_point(size = 0.25) +
+    labs(x = "Enriched in contrl <- log2(FC) -> Enriched in colitis",
+         y = "Significance, -log10(P)",
+         color = "Significance") +
+    scale_color_manual(values = c(`FC > 0.5` = "firebrick1",
+                                  `FC < -0.5` = "royalblue2",
+                                  `P < 0.05` = "orange2",
+                                  `NS or FC < 1` = "gray"),
+                       guide = guide_legend(override.aes = list(size = 2))) +
+    scale_y_continuous(expand = expansion(mult = c(0,0.05))) +
+    ggrepel::geom_text_repel(data = subset(results, Gene %in% top_g & results$`Pr(>|t|)` < 0.05),
+                    size = 2.5, point.padding = 0.15, color = "black",
+                    min.segment.length = .1, box.padding = .2, lwd = 0.25, segment.size = 0.25,
+                    max.overlaps = 100) +
+    theme_classic(base_size = 4) +
+    theme(legend.position = "bottom") +
+    facet_wrap(~Subset, scales = "free_y")
+
+ggsave('../plots/wta_volcano_large_cd45_debug.png', height = 6, width = 7.2)
+ggsave('../plots/wta_volcano_large_cd45_debug.svg', height = 3, width = 3.6)
+
+p
+
+results = results2
+results = subset(results, !(results$Gene %in% c("PAN", "Pro", "Firm", "Bac")))
+
+# cd45 in small intestine
+results = subset(results, results$Subset == 'Ecad')
+results$Estimate = -1 * results$Estimate # reverse direction
+results$Color <- "NS or FC < 0.5"
+results$Color[results$`Pr(>|t|)` < 0.05] <- "P < 0.05"
+results$Color[((results$Estimate) < -0.5) & (results$`Pr(>|t|)` < 0.05)] <- "FC < -0.5"
+results$Color[((results$Estimate) > 0.5) & (results$`Pr(>|t|)` < 0.05)] <- "FC > 0.5"
+results$Color <- factor(results$Color,
+                        levels = c("NS or FC < 0.5", "P < 0.05",
+                                   "FC < -0.5", "FC > 0.5"))
+
+# pick top genes for either side of volcano to label
+# order genes for convenience:
+results$invert_P <- (-log10(results$`Pr(>|t|)`)) * sign(results$Estimate)
+top_g <- c()
+for(cond in c("Ecad")) {
+    ind <- results$Subset == cond
+    top_g <- c(top_g,
+               results[ind, 'Gene'][
+                   order(results[ind, 'Estimate'], decreasing = TRUE)[1:15]],
+               results[ind, 'Gene'][
+                   order(results[ind, 'Estimate'], decreasing = FALSE)[1:15]])
+}
+top_g <- unique(top_g)
+results <- results[, -1*ncol(results)] # remove invert_P from matrix
+
+# Graph results
+p = ggplot(results,
+       aes(x = Estimate, y = -log10(`Pr(>|t|)`),
+           color = Color, label = Gene)) +
+    geom_vline(xintercept = c(0.5, -0.5), lty = "dashed", lwd = 0.25) +
+    geom_hline(yintercept = -log10(0.05), lty = "dashed", lwd = 0.25) +
+    geom_point(size = 0.25) +
+    labs(x = "Enriched in contrl <- log2(FC) -> Enriched in colitis",
+         y = "Significance, -log10(P)",
+         color = "Significance") +
+    scale_color_manual(values = c(`FC > 0.5` = "firebrick1",
+                                  `FC < -0.5` = "royalblue2",
+                                  `P < 0.05` = "orange2",
+                                  `NS or FC < 1` = "gray"),
+                       guide = guide_legend(override.aes = list(size = 2))) +
+    scale_y_continuous(expand = expansion(mult = c(0,0.05))) +
+    ggrepel::geom_text_repel(data = subset(results, Gene %in% top_g & results$`Pr(>|t|)` < 0.05),
+                    size = 2.5, point.padding = 0.15, color = "black",
+                    min.segment.length = .1, box.padding = .2, lwd = 0.25, segment.size = 0.25,
+                    max.overlaps = 100) +
+    theme_classic(base_size = 4) +
+    theme(legend.position = "bottom") +
+    facet_wrap(~Subset, scales = "free_y")
+
+ggsave('../plots/wta_volcano_large_ecad_debug.png', height = 6, width = 7.2)
+ggsave('../plots/wta_volcano_large_ecad_debug.svg', height = 3, width = 3.6)
+p
+```
+
+
+
+###### GSEA analysis based on DEG results
+
+
+```{r}
+library(clusterProfiler)
+library(msigdb)
+
+bp_m = read.gmt("../m5.go.bp.v2023.1.Mm.symbols.gmt")
+
+## do large cd45 gsea
+saved = read.csv('../results/DEG_large_0818.csv')
+#saved = subset(saved, saved$FDR <= 0.2 & saved$Subset == 'CD45')
+saved = subset(saved, saved$Subset == 'CD45')
+saved = saved[order(saved$Estimate, decreasing = T),] # high in cd45 large for DSSinput = high$Estimate
+
+## process
+input = saved$Estimate
+names(input) = saved$Gene
+#highres <- GSEA(input, TERM2GENE = fullc2, scoreType = "pos",pvalueCutoff = 1,eps = 0)
+highres <- GSEA(input, TERM2GENE = bp_m,pvalueCutoff = 0.05,eps = 0)
+write.csv(highres, '../results/GSEA_large_CD45.csv', row.names = F)
+
+```
+
+
+```{r}
+## do large cd45 gsea
+saved = read.csv('../results/DEG_large_0818.csv')
+#saved = subset(saved, saved$FDR <= 0.2 & saved$Subset == 'CD45')
+saved = subset(saved, saved$Subset == 'Ecad')
+saved = saved[order(saved$Estimate, decreasing = T),] # high in cd45 large for DSSinput = high$Estimate
+
+## process
+input = saved$Estimate
+names(input) = saved$Gene
+#highres <- GSEA(input, TERM2GENE = fullc2, scoreType = "pos",pvalueCutoff = 1,eps = 0)
+highres <- GSEA(input, TERM2GENE = bp_m,pvalueCutoff = 0.05,eps = 0)
+write.csv(highres, '../results/GSEA_large_Ecad.csv', row.names = F)
+```
+
+
+################# small version
+
+
+```{r}
+library(clusterProfiler)
+library(msigdb)
+
+bp_m = read.gmt("../m5.go.bp.v2023.1.Mm.symbols.gmt")
+
+## do large cd45 gsea
+saved = read.csv('../results/DEG_small_0818.csv')
+#saved = subset(saved, saved$FDR <= 0.2 & saved$Subset == 'CD45')
+saved = subset(saved, saved$Subset == 'CD45')
+saved = saved[order(saved$Estimate, decreasing = T),] # high in cd45 large for DSSinput = high$Estimate
+
+## process
+input = saved$Estimate
+names(input) = saved$Gene
+#highres <- GSEA(input, TERM2GENE = fullc2, scoreType = "pos",pvalueCutoff = 1,eps = 0)
+highres <- GSEA(input, TERM2GENE = bp_m,pvalueCutoff = 0.05,eps = 0)
+write.csv(highres, '../results/GSEA_small_CD45.csv', row.names = F)
+```
+
+
+```{r}
+
+## do large cd45 gsea
+saved = read.csv('../results/DEG_small_0818.csv')
+#saved = subset(saved, saved$FDR <= 0.2 & saved$Subset == 'CD45')
+saved = subset(saved, saved$Subset == 'Ecad')
+saved = saved[order(saved$Estimate, decreasing = T),] # high in cd45 large for DSSinput = high$Estimate
+
+## process
+input = saved$Estimate
+names(input) = saved$Gene
+#highres <- GSEA(input, TERM2GENE = fullc2, scoreType = "pos",pvalueCutoff = 1,eps = 0)
+highres <- GSEA(input, TERM2GENE = bp_m,pvalueCutoff = 0.05,eps = 0)
+write.csv(highres, '../results/GSEA_small_Ecad.csv', row.names = F)
+```
+
+
+
+###### GSEA result plotting
+
+
+```{r}
+library(ggplot2)
+library(stringr)
+### more in dss, large CD45
+res = read.csv('../results/GSEA_large_CD45.csv')
+res = res[order(res$enrichmentScore, decreasing = T),]
+res$Description = gsub('GOBP_', '', res$Description)
+res$Description <- factor(res$Description, levels = res$Description[order(res$enrichmentScore)])
+
+p = ggplot(data = res[c(1:15),], aes(x = enrichmentScore, y = Description, 
+                               color = log10(pvalue), size = setSize)) + 
+  geom_point() +
+  scale_color_gradient(low = "red", high = "blue") +
+  theme_bw() + 
+  ylab("") + 
+  xlab("") + 
+  ggtitle("GSEA_BP_Large_CD45")
+ggsave('../plots/gsea_large_cd45_top15v2.svg', height = 7, width = 10)
+p
+
+```
+
+```{r}
+### more in dss, large CD45
+res = read.csv('../results/GSEA_large_Ecad.csv')
+res = res[order(res$enrichmentScore, decreasing = T),]
+#res$Description[c(1:20)]
+res = res[c(-5, -8, -12),] # remove 'GOBP_ACROSOME_REACTION', 'GOBP_RESPONSE_TO_PROTOZOAN', 'GOBP_RETINOL_METABOLIC_PROCESS'
+res$Description <- factor(res$Description, levels = res$Description[order(res$enrichmentScore)])
+
+p = ggplot(data = res[c(1:15),], aes(x = enrichmentScore, y = Description, 
+                               color = log10(pvalue), size = setSize)) + 
+  geom_point() +
+  scale_color_gradient(low = "red", high = "blue") +
+  theme_bw() + 
+  ylab("") + 
+  xlab("") + 
+  ggtitle("GSEA_BP_Large_Ecad")
+ggsave('../plots/gsea_large_ecad_top15v2.svg', height = 7, width = 10)
+p
+
+```
+
+
+```{r}
+### more in dss, large CD45
+res = read.csv('../results/GSEA_small_CD45.csv')
+res = res[order(res$enrichmentScore, decreasing = T),]
+#res$Description[c(1:20)]
+res = res[c(-6, -11, -14, -15, -16, -17),] # removing neuro-pathology related terms
+res$Description <- factor(res$Description, levels = res$Description[order(res$enrichmentScore)])
+
+p = ggplot(data = res[c(1:15),], aes(x = enrichmentScore, y = Description, 
+                               color = log10(pvalue), size = setSize)) + 
+  geom_point() +
+  scale_color_gradient(low = "red", high = "blue") +
+  theme_bw() + 
+  ylab("") + 
+  xlab("") + 
+  ggtitle("GSEA_BP_small_CD45")
+ggsave('../plots/gsea_small_cd45_top15v2.svg', height = 7, width = 10)
+p
+
+```
+
+```{r}
+### more in dss, large CD45
+res = read.csv('../results/GSEA_small_Ecad.csv')
+res = res[order(res$enrichmentScore, decreasing = T),]
+res$Description[c(1:20)]
+#res = res[c(-6, -11, -14, -15, -16, -17),] # removing neuro-pathology related terms
+res$Description <- factor(res$Description, levels = res$Description[order(res$enrichmentScore)])
+
+p = ggplot(data = res[c(1:15),], aes(x = enrichmentScore, y = Description, 
+                               color = log10(pvalue), size = setSize)) + 
+  geom_point() +
+  scale_color_gradient(low = "red", high = "blue") +
+  theme_bw() + 
+  ylab("") + 
+  xlab("") + 
+  ggtitle("GSEA_BP_small_Ecad")
+ggsave('../plots/gsea_small_ecad_top15v2.svg', height = 7, width = 10)
+p
+
+```
+
+

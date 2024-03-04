@@ -1,0 +1,592 @@
+---
+title: "code_prep_stack"
+output: html_document
+---
+
+Script for ensemble super learner for multiomics prediction of colitis
+
+
+read meta info
+```{r}
+library(dplyr)
+library(tidyverse)
+library(tidyr)
+## make sure donut sequence all the same for all modalities
+meta_all = read.csv('../../../meta_link/meta_mibi_dsp.csv')
+meta_all$X.1 = NULL
+#maldi_fov = read.csv('../data/fov_maldi_extracted.csv')
+#meta_3 = left_join(meta_all, maldi_fov, by = c("X" = "id"))
+meta_all3 = subset(meta_all, meta_all$DSP_Bac_name != '' & meta_all$DSP_Ecad_name != '' &
+         meta_all$DSP_CD45_name != '')
+meta_all3$id = meta_all3$X
+head(meta_all3) #78
+```
+
+
+read mibi info (host)
+```{r}
+
+## first do mibi related stuff
+mibidf = read.csv('../../MIBI_analysis/final_data/host_csv/mibi_cell_resultann_0411.csv')
+# link meta info
+temp = meta_all3
+colnames(temp) = c('X', 'run', 'fov', 'location', 'DSP_Ecad_name', 'DSP_CD45_name', 'DSP_Bac_name',
+                   'tissueID', 'MALDI.ID', 'id')
+mibi_meta = left_join(mibidf, temp, by = c('run', 'fov'))
+mibi_meta = subset(mibi_meta, !is.na(mibi_meta$id))
+
+# start average percentage
+mibi_meta %>% group_by(id, annV1) %>%  summarise(n = n()) %>%
+  mutate(freq = n / sum(n)) -> celltyp_freq
+
+celltyp_freq = as.data.frame(celltyp_freq)
+celltyp_freq$n <- NULL
+celltyp_multi <- as.data.frame(spread(celltyp_freq, key = "id", value = "freq", fill = 0))
+rownames(celltyp_multi) = celltyp_multi$annV1
+celltyp_multi$annV1 <- NULL
+head(celltyp_multi)
+```
+
+
+read mibi info (bacteria)
+```{r}
+## on bacteria mibi related stuff
+bacm_df = read.csv('../../MIBI_analysis/final_data/bac_csv/bac_sig_extract_sizeNormed.csv')
+bacm_df[,c('Alx488_v3', 'DIG_v3', 'FITC_v3', 'TAMRA_v3')] = 10000 * bacm_df[,c('Alx488_v3', 'DIG_v3', 'FITC_v3', 'TAMRA_v3')] # slight scale up to match rough percentage range ps this does not matter\\
+bacm_meta = left_join(bacm_df, temp, by = c('run', 'fov'))
+bacm_meta = subset(bacm_meta, !is.na(bacm_meta$id))
+
+bacm_meta %>% group_by(id) %>% summarise_all(mean) -> bacm_sum
+bacm_sum = as.data.frame(bacm_sum[,c('Alx488_v3', 'DIG_v3', 'FITC_v3', 'TAMRA_v3','id')])
+rownames(bacm_sum) = bacm_sum$id
+bacm_sum$id = NULL
+
+bacM_multi <- as.data.frame(t(bacm_sum))
+head(bacM_multi)
+```
+
+
+read dsp info (bacteria)
+```{r}
+## read in the data first, this case we do not care about bacteria related rois, already removed
+
+dsp_counts = read.csv('../../dsp_related/final_data/microdsp_q3V2Counts.csv')
+sampname = dsp_counts$X
+## read in meta data for dsp
+meta = read.table("../../dsp_related/final_data/meta_analys_use.txt", sep = '\t', header = T, na.strings=c("","NA"))
+## need to remove some samples since no coutns somehow
+meta = meta[meta$Sample_ID %in% sampname,]
+sampnametarget = meta$Sample_ID[meta$slide.name != '0117-BCR' &
+                                  #meta$segment != 'Full ROI' &
+                                  meta$segment != 'CD45' &
+                                  meta$segment != 'Ecad' &
+                                  meta$slide.name != 'No Template Control']# sample names for wta analysis
+meta_host = meta[meta$slide.name != '0117-BCR' &
+                                  #meta$segment != 'Full ROI' &
+                                  meta$segment != 'CD45' &
+                                  meta$segment != 'Ecad' &
+                                  meta$slide.name != 'No Template Control',]# sample names for wta analysis
+meta_host$treatment = substr(meta_host$tag2, 0, 1)
+dsp_counts = dsp_counts[match(sampnametarget, sampname), ]
+dsp_counts$X = NULL
+dsp_counts$Sample_ID = meta_host$Sample_ID
+
+##### get meta data
+temp4 = temp[,c('DSP_Bac_name', 'id')]
+temp4 = temp4[temp4$DSP_Bac_name != '',]
+colnames(temp4) = c('Sample_ID', 'id')
+dsp_bac_meta = left_join(dsp_counts, temp4, by = 'Sample_ID')
+dsp_bac_meta = subset(dsp_bac_meta, !is.na(dsp_bac_meta$id))
+
+# average across donuts
+dsp_bac_meta %>% group_by(id) %>% summarise_all(mean) %>% dplyr::select(-Sample_ID) -> dsp_bac_sum
+dsp_bac_sum = as.data.frame(dsp_bac_sum)
+rownames(dsp_bac_sum) = dsp_bac_sum$id
+dsp_bac_sum$id = NULL
+dsp_bac_sum = as.data.frame(t(dsp_bac_sum))/1000000 # totally arbitrary scalling scheme
+head(dsp_bac_sum)
+```
+
+
+read dsp info (host)
+```{r}
+## read in the data first, this case we do not care about bacteria related rois, already removed
+
+dsp_counts = read.csv('../../dsp_related/final_data/microdsp_q3Counts.csv')
+sampname = dsp_counts$X
+## read in meta data for dsp
+meta = read.table("../../dsp_related/final_data/meta_analys_use.txt", sep = '\t', header = T, na.strings=c("","NA"))
+## need to remove some samples since no coutns somehow
+meta = meta[meta$Sample_ID %in% sampname,]
+sampnametarget = meta$Sample_ID[meta$slide.name != '0117-BCR' &
+                                  meta$segment != 'Full ROI' &
+                                  meta$slide.name != 'No Template Control']# sample names for wta analysis
+meta_host = meta[meta$slide.name != '0117-BCR' &
+                                  meta$segment != 'Full ROI' &
+                                  meta$slide.name != 'No Template Control',]# sample names for wta analysis
+meta_host$treatment = substr(meta_host$tag2, 0, 1)
+dsp_counts = dsp_counts[match(sampnametarget, sampname), ]
+dsp_counts$X = NULL
+
+##### input formating finished
+
+
+### start doing svd but lets seperate cd45 reg and ecad reg
+dsp_counts_cd45 = dsp_counts[meta_host$segment == 'CD45',]
+dsp_counts_ecad = dsp_counts[meta_host$segment == 'Ecad',]
+## meta
+dsp_meta_cd45 = meta_host[meta_host$segment == 'CD45',]
+dsp_meta_ecad = meta_host[meta_host$segment == 'Ecad',]
+
+## start svd on each different segment
+dsp_counts_cd45_svd = svd(scale(dsp_counts_cd45))
+plot(dsp_counts_cd45_svd$d) # looks like 20 is more than enough
+## start svd on each different segment
+dsp_counts_ecad_svd = svd(scale(dsp_counts_ecad))
+plot(dsp_counts_ecad_svd$d) # looks like 20 is more than enough
+```
+
+reduce by SVD
+```{r}
+library(reshape2)
+
+# quick function on get top k data
+
+getsvd = function(input, k){ # input should be a svd object
+  # use top 15 svd components
+  U <- as.matrix(input$u[, 1:k])
+  d = diag(input$d)
+  d <- as.matrix(d[1:k, 1:k])
+  V <- as.matrix(input$v[, 1:k])
+  res <- U %*% d #%*% t(V15)
+  res = as.data.frame(res)
+  colnames(res) = paste0('svd_',c(1:k))
+  return(res)
+  
+}
+
+dsp_cd45_svd20 = getsvd(dsp_counts_cd45_svd, 20)
+dsp_ecad_svd20 = getsvd(dsp_counts_ecad_svd, 20)
+
+# then we link the files to maldi id
+temp2 = temp[,c('DSP_Ecad_name', 'DSP_CD45_name', 'id')]
+temp2 = temp2[temp2$DSP_Ecad_name != '' &
+        temp2$DSP_CD45_name != '',]
+a = temp2[,c(1,3)]
+a$type = 'Ecad'
+b = temp2[,c(2,3)]
+b$type = 'CD45'
+colnames(a) = c('sid', 'id', 'type')
+colnames(b) = c('sid', 'id', 'type')
+temp3 = rbind(a,b)
+
+# link information
+dsp_cd45_svd20$sid = dsp_meta_cd45$Sample_ID
+dsp_ecad_svd20$sid = dsp_meta_ecad$Sample_ID
+dsp_cd45_svd20_meta = left_join(dsp_cd45_svd20, temp3, by = 'sid')
+dsp_ecad_svd20_meta = left_join(dsp_ecad_svd20, temp3, by = 'sid')
+
+## final format clean up cd45 version
+dsp_cd45_svd20_meta %>% group_by(id) %>% summarise_all(mean)  %>%
+  dplyr::select(-sid, -type) %>% na.omit() -> dsp_svd20_sum_cd45
+rownames(dsp_svd20_sum_cd45) = dsp_svd20_sum_cd45$id
+dsp_svd20_sum_cd45 = as.data.frame(t(dsp_svd20_sum_cd45))
+dsp_svd20_sum_cd45 = dsp_svd20_sum_cd45[-1,]
+rownames(dsp_svd20_sum_cd45) = paste0('cd45_', rownames(dsp_svd20_sum_cd45))
+#head(dsp_svd20_sum_cd45) # do we do averag
+
+## final format clean up cd45 version
+dsp_ecad_svd20_meta %>% group_by(id) %>% summarise_all(mean)  %>%
+  dplyr::select(-sid, -type) %>% na.omit() -> dsp_svd20_sum_ecad
+rownames(dsp_svd20_sum_ecad) = dsp_svd20_sum_ecad$id
+dsp_svd20_sum_ecad = as.data.frame(t(dsp_svd20_sum_ecad))
+dsp_svd20_sum_ecad = dsp_svd20_sum_ecad[-1,]
+rownames(dsp_svd20_sum_ecad) = paste0('ecad_', rownames(dsp_svd20_sum_ecad))
+#head(dsp_svd20_sum_ecad) # do we do averag
+```
+
+
+read Maldi
+```{r}
+# glycan expression
+gexp = read.csv('../../multiomics/data/fov_maldi_extracted.csv')
+#gexp = as.data.frame(t(gexp))/1000 # just some arbitrary scaling
+gexp$id = as.character(gexp$id)
+gexp2 = gexp[match(colnames(dsp_svd20_sum_ecad),gexp$id),]
+#gexp2$id = NULL
+rownames(gexp2) = gexp2$id
+glyc = colnames(gexp2)
+gexp2 = as.data.frame(t(gexp2))
+gexp2 = gexp2[-1,]
+gexp2 <- sapply( gexp2, as.numeric )
+gexp2 = gexp2/1000
+rownames(gexp2) = glyc[1:38]
+gexp2 = as.data.frame(gexp2)
+head(gexp2)
+```
+
+Get sample (regions) with all three omics information
+```{r, warning=FALSE}
+
+target_id = Reduce(intersect, list(colnames(celltyp_multi), colnames(bacM_multi),
+          colnames(dsp_svd20_sum_cd45), colnames(dsp_svd20_sum_ecad),
+          colnames(dsp_bac_sum), colnames(gexp2)))
+length(target_id) # 35 to go should be fine
+target_id
+```
+
+quick clean up to get colitis status avaliable
+```{r, warning=FALSE}
+meta_all3$status = substr(meta_all3$tissueID, 0, 1)
+status = meta_all3$status[match(target_id, meta_all3$id)]
+table(status)
+```
+
+gather information and formatting
+```{r, warning=FALSE}
+## prep data
+mibi = as.data.frame(t(rbind(celltyp_multi[,target_id], bacM_multi[,target_id])))
+dsp = rbind(dsp_svd20_sum_cd45[,target_id], dsp_svd20_sum_ecad[,target_id])
+dsp = as.data.frame(t(rbind(dsp, dsp_bac_sum[,target_id])))
+dsp = as.data.frame(sapply( dsp, as.numeric ))
+rownames(dsp) = rownames(mibi)
+maldi = as.data.frame(t(gexp2[,target_id]))
+
+### add response
+#mibi$res = as.factor(status)
+#dsp$res = as.factor(status)
+maldi$res = as.factor(status)
+
+print(c(dim(mibi), dim(dsp), dim(maldi)))
+```
+
+
+Ensemble learner process start
+
+first prep stuff and parameter etc
+```{r, warning=FALSE}
+library(h2o)
+library(tidyverse)
+
+#smp_size = floor(0.75 * nrow(mibi))
+# try 50/50 training
+smp_size = floor(0.6 * nrow(mibi))
+
+set.seed(42)
+train_ind <- sample(seq_len(nrow(mibi)), size = smp_size)
+
+## get split
+all = do.call(cbind, list(mibi, dsp, maldi))
+all_tr = all[train_ind,]
+all_te = all[-train_ind,]
+
+
+features = colnames(all)
+##
+h2o.init()
+all_trh2o=as.h2o(all_tr)
+all_teh2o=as.h2o(all_te)
+all_h2o = as.h2o(all)
+
+# Number of CV folds (to generate level-one data for stacking)
+nfolds = 5
+```
+
+First model: RF on MIBI features
+```{r}
+## base model, try rf first with mibi
+y = 'res'
+rf1 <- h2o.randomForest(x = features[c(1:17)],
+                          y = y,
+                          training_frame = all_trh2o,
+                          nfolds = nfolds,
+                          keep_cross_validation_predictions = TRUE,
+                          seed = 42)
+
+#p = as.data.frame(h2o.predict(rf1, all_teh2o))
+#sum(p$predict == all_te$res)/ length(all_te$res)
+
+p1 <- h2o.performance(rf1, newdata = all_teh2o)
+#tt@metrics$AUC
+#tt@metrics$logloss
+```
+
+
+Second model: RF on DSP SVD PCs
+```{r, warning=FALSE}
+## base model, dsp
+y = 'res'
+rf2 <- h2o.randomForest(x = features[c(18:61)],
+                          y = y,
+                          training_frame = all_trh2o,
+                          nfolds = nfolds,
+                          keep_cross_validation_predictions = TRUE,
+                          seed = 42)
+#p = as.data.frame(h2o.predict(rf2, dsp_teh2o))
+#sum(p$predict == dsp_te$res)/ length(dsp_te$res)
+
+p2 <- h2o.performance(rf2, newdata = all_teh2o)
+#p = as.data.frame(h2o.predict(rf2, all_teh2o))
+#sum(p$predict == all_te$res)/ length(all_te$res)
+#tt <- h2o.performance(rf2, newdata = all_teh2o)
+#tt@metrics$AUC
+#tt@metrics$logloss
+```
+
+Third model: RF on MALDI
+```{r, warning=FALSE}
+## base model, dsp
+y = 'res'
+rf3 <- h2o.randomForest(x = features[c(62:99)],
+                          y = y,
+                          training_frame = all_trh2o,
+                          nfolds = nfolds,
+                          keep_cross_validation_predictions = TRUE,
+                          seed = 42)
+#p = as.data.frame(h2o.predict(rf3, maldi_teh2o))
+#sum(p$predict == maldi_te$res)/ length(maldi_te$res)
+
+p3 <- h2o.performance(rf3, newdata = all_teh2o)
+#p = as.data.frame(h2o.predict(rf3, all_teh2o))
+#sum(p$predict == all_te$res)/ length(all_te$res)
+#tt <- h2o.performance(rf3, newdata = all_teh2o)
+```
+
+
+Last model: super learner based on three RF models
+```{r, warning=FALSE}
+ensemble <- h2o.stackedEnsemble(y = y,
+                                training_frame = all_trh2o,
+                                metalearner_algorithm = 'drf',
+                                base_models = list(rf1, rf2, rf3),
+                                seed = 42)
+
+p4 <- h2o.performance(ensemble, newdata = all_teh2o)
+```
+
+
+
+Now start to get all kinds of evaluation metrics:
+
+```{r}
+loglist = list(h2o.logloss(p1),
+h2o.logloss(p2),
+h2o.logloss(p3),
+h2o.logloss(p4)
+)
+loglist = unlist(loglist)
+loglist
+```
+
+```{r}
+acclist = list(
+  max(h2o.accuracy(p1)$accuracy),
+max(h2o.accuracy(p2)$accuracy),
+max(h2o.accuracy(p3)$accuracy),
+max(h2o.accuracy(p4)$accuracy)
+
+)
+acclist = unlist(acclist)
+acclist
+```
+
+```{r}
+auclist = list(h2o.auc(p1),
+h2o.auc(p2),
+h2o.auc(p3),
+h2o.auc(p4)
+)
+auclist = unlist(auclist)
+auclist
+```
+
+```{r}
+mcclist = list(
+  max(h2o.mcc(p1)$absolute_mcc),
+  max(h2o.mcc(p2)$absolute_mcc),
+  max(h2o.mcc(p3)$absolute_mcc),
+  max(h2o.mcc(p4)$absolute_mcc)
+)
+mcclist = unlist(mcclist)
+mcclist
+```
+
+```{r}
+f1list = list(max(h2o.F1(p1)$f1),
+max(h2o.F1(p2)$f1),
+max(h2o.F1(p3)$f1),
+max(h2o.F1(p4)$f1)
+)
+f1list = unlist(f1list)
+f1list
+```
+
+
+Start plotting:
+```{r}
+metric_df = data.frame(f1 = f1list, mcc = mcclist, log = loglist, acc = acclist)
+metric_df$type = c('mibi', 'dsp', 'maldi',  'ensemble')
+metric_df
+```
+
+```{r}
+## plotting
+## make color panel
+clr_pl = c('#38E54D', # green
+           '#00A9FF',  # blue
+           '#D80032', # red
+           '#FFC436' # yellow
+           )
+
+names(clr_pl) <- c( "dsp",
+                    "maldi",
+                    'mibi',
+                    'ensemble'
+                     )
+
+metric_df$type <- factor(metric_df$type, levels = metric_df$type[order(metric_df$f1)])
+
+p  = ggplot(metric_df, aes(x = type, y = f1, fill = type)) +
+  geom_bar(stat="identity", width = 0.5, color="#45474B", size=0.2) + theme_classic() +
+  scale_fill_manual(values = clr_pl) + coord_cartesian(ylim = c(0,1)) +
+  theme(legend.position="none")
+ggsave('../plots/f1_v2.svg', height = 2, width = 2)
+p
+```
+
+```{r}
+metric_df$type <- factor(metric_df$type, 
+                         levels = metric_df$type[order(metric_df$log, decreasing = T)])
+
+p  = ggplot(metric_df, aes(x = type, y = log, fill = type)) +
+  geom_bar(stat="identity", width = 0.5, color="#45474B", size=0.2) + theme_classic() +
+  scale_fill_manual(values = clr_pl) + coord_cartesian(ylim = c(0,0.6)) +
+  theme(legend.position="none")
+ggsave('../plots/log_v2.svg', height = 2, width = 2)
+p
+```
+
+```{r}
+metric_df$type <- factor(metric_df$type, levels = metric_df$type[order(metric_df$mcc)])
+
+p  = ggplot(metric_df, aes(x = type, y = mcc, fill = type)) +
+  geom_bar(stat="identity", width = 0.5, color="#45474B", size=0.2) + theme_classic() +
+  scale_fill_manual(values = clr_pl) + coord_cartesian(ylim = c(0,1)) +
+  theme(legend.position="none")
+ggsave('../plots/mcc_v2.svg', height = 2, width = 2)
+p
+```
+
+```{r}
+metric_df$type <- factor(metric_df$type, levels = metric_df$type[order(metric_df$acc)])
+
+p  = ggplot(metric_df, aes(x = type, y = acc, fill = type)) +
+  geom_bar(stat="identity", width = 0.5, color="#45474B", size=0.2) + theme_classic() +
+  scale_fill_manual(values = clr_pl) + coord_cartesian(ylim = c(0,1)) +
+  theme(legend.position="none")
+ggsave('../plots/acc_v2.svg', height = 2, width = 2)
+p
+```
+
+
+
+Code below is for calculating importance scores:
+
+
+Get dropout models, eg droping out individual modalities
+```{r}
+library(Metrics)
+
+# get the weight of each model by doing hold out
+ensemble <- h2o.stackedEnsemble(y = y,
+                                training_frame = all_trh2o,
+                                metalearner_algorithm = 'drf',
+                                base_models = list(rf1, rf2, rf3),
+                                seed = 42)
+
+tt <- h2o.performance(ensemble, newdata = all_teh2o)
+best = tt@metrics$logloss
+
+##
+ensemble <- h2o.stackedEnsemble(y = y,
+                                training_frame = all_trh2o,
+                                metalearner_algorithm = 'drf',
+                                base_models = list(rf1, rf2),
+                                seed = 42)
+
+tt <- h2o.performance(ensemble, newdata = all_teh2o)
+no3 = tt@metrics$logloss
+
+##
+ensemble <- h2o.stackedEnsemble(y = y,
+                                training_frame = all_trh2o,
+                                metalearner_algorithm = 'drf',
+                                base_models = list(rf1, rf3),
+                                seed = 42)
+
+tt <- h2o.performance(ensemble, newdata = all_teh2o)
+no2 = tt@metrics$logloss
+
+##
+ensemble <- h2o.stackedEnsemble(y = y,
+                                training_frame = all_trh2o,
+                                metalearner_algorithm = 'drf',
+                                base_models = list(rf2, rf3),
+                                seed = 42)
+
+tt <- h2o.performance(ensemble, newdata = all_teh2o)
+no1 = tt@metrics$logloss
+```
+
+From drop out models, we can get scaling values for individual modalities
+Then we directly use the varimp function for RF models
+and scale based on the results acquired from dropout models
+```{r}
+# produce relative weights from the drop out tests
+# let mod1(mibi) be standard
+maldi_w = (no3-best) / (no1-best)
+dsp_w = (no2-best) / (no1-best)
+
+## imp
+mibi_imp = as.data.frame(h2o.varimp(rf1))
+mibi_imp$type = 'MIBI'
+dsp_imp = as.data.frame(h2o.varimp(rf2))
+dsp_imp$percentage = dsp_imp$percentage * dsp_w
+dsp_imp$type = 'DSP'
+maldi_imp = as.data.frame(h2o.varimp(rf3))
+maldi_imp$percentage = maldi_imp$percentage * maldi_w
+maldi_imp$type = 'MALDI'
+
+all_imp = do.call(rbind, list(mibi_imp, dsp_imp, maldi_imp))
+```
+
+plotting
+```{r}
+
+## plotting
+## make color panel
+clr_pl = c('#38E54D', # green
+           '#00A9FF',  # blue
+           '#D80032' # red
+           )
+
+names(clr_pl) <- c( "DSP",
+                    "MALDI",
+                    'MIBI'
+                     )
+
+
+all_imp$variable <- factor(all_imp$variable, levels = all_imp$variable[order(all_imp$percentage)])
+
+p = ggplot(all_imp, aes(x = variable, y = percentage, fill = type)) +
+  geom_bar(stat="identity",color="#45474B", size=0.2, alpha = 0.7) + theme_classic() +
+  scale_fill_manual(values = clr_pl) +
+  theme(
+      axis.text.x=element_blank(), 
+      axis.ticks.x=element_blank(),
+      legend.position = 'none')
+ggsave('../plots/feat_imp_v2.svg', height = 2, width = 4.5)
+p
+```
+
+

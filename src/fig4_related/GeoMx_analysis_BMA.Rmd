@@ -1,0 +1,112 @@
+---
+title: "testBac_counts"
+output: html_document
+---
+
+This script produce analysis done on DSP with Bacteria microarray for bacteria probe validation.
+
+```{r}
+library(ggplot2)
+##
+dspq3 = read.csv("../final_data/microdsp_q3V2Counts.csv") # input Q3 normalized counts from previous script.
+custom_probes = c("X","Bac", "Firm", "PAN", "Pro")
+dspq3_cus = dspq3[,custom_probes]
+rownames(dspq3_cus) = dspq3_cus$X
+dspq3_cus$X <- NULL
+dspq3_cus = dspq3_cus[rowSums(is.na(dspq3_cus)) != ncol(dspq3_cus), ]
+
+## also read in the meta inforamtion
+meta = read.table("../final_data/meta_analys_use.txt", sep = '\t', header = T, na.strings=c("","NA"))
+
+# align with dsp id
+idx = match(rownames(dspq3_cus), meta$Sample_ID)
+meta2 = meta[idx,]
+```
+
+```{r}
+dspq3_cus_pellet = dspq3_cus[meta2$slide.name == '0117-BCR',] # BMA rois
+meta_pallet = meta2[meta2$slide.name == '0117-BCR',] # BMA rois  meta
+dspq3_cus_pellet$type = meta_pallet$tag2
+```
+
+```{r}
+library(ggsci)
+library(dplyr)
+library(reshape2)
+#library(tidyverse)
+
+# Data
+temp =  melt(dspq3_cus_pellet)
+# Calculates mean, sd, se and IC
+my_sum <- temp %>%
+  group_by(type, variable) %>%
+  dplyr::summarise( 
+    n=n(),
+    mean=mean(log10(value)),
+    sd=sd(log10(value))
+  ) %>%
+  mutate( se=sd/sqrt(n))  %>%
+  mutate( ic=se * qt((1-0.05)/2 + .5, n-1))
+ 
+my_sum$phylum = "Bacteroidetes"
+my_sum$phylum[my_sum$type %in% c("Cperf", "Rgnav")] = "Firmicutes"
+
+### start making
+subsum = subset(my_sum, my_sum$variable == 'Firm')
+p = ggplot(subsum) +
+    geom_bar( aes(x=type, y = mean, fill = phylum), stat="identity", alpha=0.9) + theme_bw()+
+    geom_errorbar( aes(x=type, ymin=mean-sd, ymax=mean+sd), width=0.08, colour="black", alpha=0.9, size=0.2) +
+    ylim(c(0,5)) + theme_classic()
+ggsave("../temp_plots/Firm_DSP_counts.svg", height = 3, width = 4.5)
+p
+```
+
+```{r}
+subsum = subset(my_sum, my_sum$variable == 'Bac')
+p = ggplot(subsum) +
+    geom_bar( aes(x=type, y = mean, fill = phylum), stat="identity", alpha=0.9) + theme_bw()+
+    geom_errorbar( aes(x=type, ymin=mean-sd, ymax=mean+sd), width=0.08, colour="black", alpha=0.9, size=0.2) +
+    ylim(c(0,6)) + theme_classic()
+ggsave("../temp_plots/Bac_DSP_counts.svg", height = 3, width = 4.5)
+p
+```
+
+
+Violin plot for bacteria signals on intestinal tissue samples:
+
+
+```{r}
+## but also we need norm by size at least
+dspq3_cus_feces = dspq3_cus[meta2$segment == 'Full ROI',] # pellet rois
+meta_feces = meta2[meta2$segment == 'Full ROI',] # pellet rois  meta
+
+## also make t c for dss treatment
+meta_feces$treatment = substr(meta_feces$tag2, 0, 1)
+dspq3_cus_feces$location = meta_feces$tags1
+dspq3_cus_feces$treatment = meta_feces$treatment
+dspq3_cus_feces$area = meta_feces$area
+```
+
+
+```{r}
+library(patchwork)
+
+p1<-ggplot(dspq3_cus_feces, aes(x=interaction(treatment,location), y=log10(PAN), fill=interaction(treatment,location))) +
+  geom_violin(trim=F, show.legend = FALSE) + geom_boxplot(width=0.1, fill="white", outlier.shape = NA) + theme_bw()
+
+p2<-ggplot(dspq3_cus_feces, aes(x=interaction(treatment,location), y=log10(Firm), fill=interaction(treatment,location))) +
+  geom_violin(trim=F, show.legend = FALSE) + geom_boxplot(width=0.1, fill="white", outlier.shape = NA) + theme_bw()
+
+p3<-ggplot(dspq3_cus_feces, aes(x=interaction(treatment,location), y=log10(Bac), fill=interaction(treatment,location))) +
+  geom_violin(trim=F, show.legend = FALSE) + geom_boxplot(width=0.1, fill="white", outlier.shape = NA) + theme_bw()
+
+p4<-ggplot(dspq3_cus_feces, aes(x=interaction(treatment,location), y=log10(Pro), fill=interaction(treatment,location))) +
+  geom_violin(trim=F, show.legend = FALSE) + geom_boxplot(width=0.1, fill="white", outlier.shape = NA) + theme_bw()
+
+
+plots <- list(p1, p2, p3, p4)
+pall = wrap_plots(plots)
+ggsave('../temp_plots/bacteria_dsp_compare.svg', height = 4, width = 5)
+pall
+```
+

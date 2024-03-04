@@ -1,0 +1,122 @@
+---
+title: "mac_muscle_distance"
+output: html_document
+---
+
+Plotting for distanced based analysis.
+
+First plot the medium distance to nearest macrophage/monocytes.
+
+
+```{r}
+library(stringr)
+
+knnsearch = read.csv('../data/KNN100_searchMhigh.csv')
+run_fov = str_split_fixed(knnsearch$run_fov, "_", 2)
+knnsearch$run = run_fov[,1]
+knnsearch$fov = run_fov[,2]
+
+## load in the meta information
+full_meta = read.csv('../../../meta_link/meta_mibi_dsp.csv', na.strings=c("","NA"))
+colnames(full_meta)[2] = "run"
+colnames(full_meta)[3] = "fov"
+
+k_meta = left_join(knnsearch, full_meta, by = c('fov', 'run'))
+# add more meta info
+k_meta$tissue = str_sub(k_meta$run, -7,-6)
+k_meta$treatment = str_sub(k_meta$tissue, -3,-2)
+
+
+## also need to get the percentage high meta labels
+library(dplyr)
+mibidf = read.csv('../../MIBI_analysis/final_data/host_csv/mibi_cell_resultann_0411.csv')
+
+# mph and monocyte into myeloid
+mibidf[mibidf == "Macrophage"] <- "Myeloid" # just combine them while plotting
+mibidf[mibidf == "Monocyte"] <- "Myeloid"
+
+##
+perc_ann = mibidf %>% group_by(fov, run, annV1) %>% 
+  summarise(n = n()) %>%
+  mutate(freq = n / sum(n))
+perc_ann = left_join(perc_ann, full_meta, by = c('fov', 'run'))
+perc_ann_my_lg = subset(perc_ann, (perc_ann$location == 'Large' & perc_ann$annV1 == 'Myeloid'))
+perc_ann_my_lg_top = perc_ann_my_lg[order(perc_ann_my_lg$freq, decreasing = T)[1:15],]
+
+```
+
+
+```{r}
+## add the macmono high label information
+target = perc_ann_my_lg_top$tissueID
+k_meta$label = 'Other'
+k_meta$label[k_meta$tissueID %in% target] = 'High'
+k_meta$label = factor(k_meta$label, levels = c('Other', 'High'))
+
+library(ggplot2)
+p1 = ggplot(k_meta , aes(x = label, y = ksearch_dist_medium, fill = label)) +
+  geom_violin(trim=FALSE, show.legend = FALSE)+
+  geom_boxplot(width=0.05, fill = 'white')+
+   theme_bw() + ggtitle('sma search first macrophage') + scale_fill_manual(values=c("#00966d", "#cf4528"))
+ggsave('../plots/sma_search_first_macmono.svg', height = 4, width = 5)
+p1
+```
+
+```{r}
+# also acquire statistics
+x = k_meta$ksearch_dist_medium[k_meta$label == 'High']
+y = k_meta$ksearch_dist_medium[k_meta$label == 'Other']
+t.test(x, y)
+```
+
+
+
+Same analysis but now based on the percentage of macrophage/monocytes in the nearest neighborhoods.
+
+
+```{r}
+library(stringr)
+
+knbhd = read.csv('../data/Knbhd_searchMhigh.csv')
+run_fov = str_split_fixed(knbhd$run_fov, "_", 2)
+knbhd$run = run_fov[,1]
+knbhd$fov = run_fov[,2]
+
+## load in the meta information
+full_meta = read.csv('../../../meta_link/meta_mibi_dsp.csv', na.strings=c("","NA"))
+colnames(full_meta)[2] = "run"
+colnames(full_meta)[3] = "fov"
+
+knbhd_meta = left_join(knbhd, full_meta, by = c('fov', 'run'))
+# add more meta info
+knbhd_meta$tissue = str_sub(knbhd_meta$run, -7,-6)
+knbhd_meta$treatment = str_sub(knbhd_meta$tissue, -3,-2)
+
+```
+
+
+```{r}
+## add the macmono high label information
+target = perc_ann_my_lg_top$tissueID
+knbhd_meta$label = 'Other'
+knbhd_meta$label[knbhd_meta$tissueID %in% target] = 'High'
+knbhd_meta$label = factor(knbhd_meta$label, levels = c('Other', 'High'))
+
+library(ggplot2)
+p1 = ggplot(knbhd_meta , aes(x = label, y = perc_medium, fill = label)) +
+  geom_violin(trim=FALSE, show.legend = FALSE)+
+  geom_boxplot(width=0.05, fill = 'white')+
+   theme_bw() + ggtitle('sma knn m percentage') + scale_fill_manual(values=c("#00966d", "#cf4528"))
+ggsave('../plots/sma_knn20_mperc.svg', height = 4, width = 5)
+p1
+```
+
+
+```{r}
+# similarlly we acquire test statistics
+x = knbhd_meta$perc_medium[knbhd_meta$label == 'High']
+y = knbhd_meta$perc_medium[knbhd_meta$label == 'Other']
+t.test(x, y)
+```
+
+

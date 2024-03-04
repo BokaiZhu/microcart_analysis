@@ -1,0 +1,60 @@
+---
+title: "prep_cnmf"
+output: html_document
+---
+
+Code to prep cnmf process, file format making, nothing important:
+
+
+```{r}
+library(stringr)
+library(dplyr)
+
+mibidf = read.csv('../../../../MIBI_analysis/final_data/host_csv/mibi_cell_resultann_0411.csv')
+
+# mph and monocyte into myeloid
+mibidf[mibidf == "Macrophage"] <- "Myeloid"
+mibidf[mibidf == "Monocyte"] <- "Myeloid"
+
+##
+perc_ann = mibidf %>% group_by(fov, run, annV1) %>% 
+  summarise(n = n()) %>%
+  mutate(freq = n / sum(n))
+
+full_meta = read.csv('../../../../../meta_link/meta_mibi_dsp.csv', na.strings=c("","NA"))
+colnames(full_meta)[2] = "run"
+colnames(full_meta)[3] = "fov"
+
+perc_ann = left_join(perc_ann, full_meta, by = c('fov', 'run'))
+perc_ann$X.x <- NULL
+perc_ann$X.y <- NULL
+
+# add more meta info
+perc_ann$tissue = str_sub(perc_ann$run, -7,-6)
+perc_ann$treatment = str_sub(perc_ann$tissue, -3,-2)
+```
+
+
+```{r}
+### intended output format:
+# CD45ID - EcadID - Myleoid state
+temp = subset(perc_ann, perc_ann$annV1 == 'Myeloid')
+temp2 = data.frame(freq = temp$freq, loc = temp$location,
+                   ecad = temp$DSP_Ecad_name, cd45 = temp$DSP_CD45_name)
+temp3 = na.omit(temp2)
+
+## rank high ones
+tt = subset(temp3, temp3$loc == 'Large')
+id_l = rownames(tt[order(tt$freq, decreasing = T)[1:15],]) # 15
+
+## put state
+temp3$state = 'Low'
+temp3$state[rownames(temp3) %in% id_l] = 'High'
+
+## save in caes use
+write.csv(temp3, '../../../data/myeloid_highlow_meta.csv', row.names = FALSE)
+```
+
+
+
+

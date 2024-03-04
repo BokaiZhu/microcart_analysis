@@ -1,0 +1,369 @@
+---
+title: "gsea_macrophage"
+output: html_document
+---
+
+GSEA analysis related to macrophage / monocyte infiltration regions
+
+### first we identify DEGs (similar as before but now different comparison groups)
+
+```{r}
+# read in annotation from mib
+library(dplyr)
+mibidf = read.csv('../../MIBI_analysis/final_data/host_csv/mibi_cell_resultann_0411.csv')
+
+# mph and monocyte into myeloid
+mibidf[mibidf == "Macrophage"] <- "Myeloid"
+mibidf[mibidf == "Monocyte"] <- "Myeloid"
+
+##
+perc_ann = mibidf %>% group_by(fov, run, annV1) %>% 
+  summarise(n = n()) %>%
+  mutate(freq = n / sum(n))
+#perc_ann
+```
+
+
+```{r}
+library(stringr)
+full_meta = read.csv('../../../meta_link/meta_mibi_dsp.csv', na.strings=c("","NA"))
+colnames(full_meta)[2] = "run"
+colnames(full_meta)[3] = "fov"
+
+perc_ann = left_join(perc_ann, full_meta, by = c('fov', 'run'))
+perc_ann$X.x <- NULL
+perc_ann$X.y <- NULL
+
+# add more meta info
+perc_ann$tissue = str_sub(perc_ann$run, -7,-6)
+perc_ann$treatment = str_sub(perc_ann$tissue, -3,-2)
+
+# other immune in small intestine
+perc_ann_my_lg = subset(perc_ann, (perc_ann$location == 'Large' & perc_ann$annV1 == 'Myeloid'))
+perc_ann_my_lg = perc_ann_my_lg[!is.na(perc_ann_my_lg$DSP_Ecad_name),]
+perc_ann_my_lg_top = perc_ann_my_lg[order(perc_ann_my_lg$freq, decreasing = T)[1:15],] # top 15 regions
+```
+
+
+```{r}
+sampname = gsub('.dcc', '',colnames(target_microdsp))
+## read in meta data
+meta = read.table("../../dsp_related/final_data/meta_analys_use.txt", sep = '\t', header = T, na.strings=c("","NA"))
+## need to remove some samples since no coutns somehow
+meta = meta[meta$Sample_ID %in% sampname,]
+sampnametarget = meta$Sample_ID[meta$slide.name != '0117-BCR' &
+                                  meta$segment != 'Full ROI' &
+                                  meta$slide.name != 'No Template Control']# sample names for wta analysis
+meta_host = meta[meta$slide.name != '0117-BCR' &
+                                  meta$segment != 'Full ROI' &
+                                  meta$slide.name != 'No Template Control',]# sample names for wta analysis
+meta_host$treatment = substr(meta_host$tag2, 0, 1)
+
+target_microdsp_host = target_microdsp[,match(sampnametarget, sampname)]
+```
+
+
+```{r}
+## prep meta info
+meta_mibi = read.csv('../../../meta_link/meta_mibi_dsp.csv')
+meta_mibi_temp = meta_mibi[,c("location", "DSP_Ecad_name", "DSP_CD45_name", "DSP_Bac_name")]
+region2dsp = melt(meta_mibi_temp, id.vars=c("location"),var='DSP_name')
+region2dsp = region2dsp[region2dsp$value != '',]
+
+## indicator for annv1 info
+lgmy_ecad45_rois = c(perc_ann_my_lg_top$DSP_Ecad_name,perc_ann_my_lg_top$DSP_CD45_name)
+
+# add in indicators
+meta_host$my_roi = "NO"
+meta_host$my_roi[meta_host$Sample_ID %in% lgmy_ecad45_rois] = "YES"
+```
+
+
+
+##### actual DEG analysis start
+
+
+```{r}
+sampnametarget = meta$Sample_ID[meta$slide.name != '0117-BCR' &
+                                  meta$segment != 'Full ROI' &
+                                  meta$slide.name != 'No Template Control']# sample names for wta analysis
+lg = region2dsp$value[region2dsp$location == 'Large']
+sampnametarget = sampnametarget[sampnametarget %in% lg] # rois for small intestine
+
+target_microdsp_host_l = target_microdsp[,match(sampnametarget, sampname)]
+
+## prep deg process
+pData(target_microdsp_host_l)$testClass <- # control and treatment group to compare (diseased)
+    factor( meta_host$my_roi[match(sampnametarget, meta_host$Sample_ID)], c("NO", "YES"))
+
+pData(target_microdsp_host_l)[["slide"]] <- # compare across slides, so set set slide as intercept too
+    factor(pData(target_microdsp_host_l)[["slide name"]])
+
+assayDataElement(object = target_microdsp_host_l, elt = "log_q") <- # log norm counts as suggested
+    assayDataApply(target_microdsp_host_l, 2, FUN = log, base = 2, elt = "q_norm")
+
+
+############################### deg 
+
+results2 <- c()
+for(region in c("CD45", "Ecad")) {
+    ind <- pData(target_microdsp_host_l)$segment == region
+    mixedOutmc <-
+        mixedModelDE(target_microdsp_host_l[, ind],
+                     elt = "log_q",
+                     modelFormula = ~ testClass + (1 | slide),
+                     groupVar = "testClass",
+                     nCores = parallel::detectCores(),
+                     multiCore = FALSE)
+    
+    # format results as data.frame
+    r_test <- do.call(rbind, mixedOutmc["lsmeans", ])
+    tests <- rownames(r_test)
+    r_test <- as.data.frame(r_test)
+    r_test$Contrast <- tests
+    
+    # use lapply in case you have multiple levels of your test factor to
+    # correctly associate gene name with it's row in the results table
+    r_test$Gene <- 
+        unlist(lapply(colnames(mixedOutmc),
+                      rep, nrow(mixedOutmc["lsmeans", ][[1]])))
+    r_test$Subset <- region
+    r_test$FDR <- p.adjust(r_test$`Pr(>|t|)`, method = "fdr")
+    r_test <- r_test[, c("Gene", "Subset", "Contrast", "Estimate", 
+                         "Pr(>|t|)", "FDR")]
+    results2 <- rbind(results2, r_test)
+}
+
+results_lg_mph = results2
+results_lg_mph = subset(results_lg_mph, !(results_lg_mph$Gene %in% c("PAN", "Pro", "Firm", "Bac")))
+results = results_lg_mph
+
+```
+
+### plot some volcano (used in supp):
+
+```{r}
+# cd45 in small intestine
+results = subset(results, results$Subset == 'CD45')
+results$Estimate = -1 * results$Estimate # reverse direction
+results$Color <- "NS or FC < 0.5"
+results$Color[results$`Pr(>|t|)` < 0.05] <- "P < 0.05"
+results$Color[((results$Estimate) < -0.5) & (results$`Pr(>|t|)` < 0.05)] <- "FC < -0.5"
+results$Color[((results$Estimate) > 0.5) & (results$`Pr(>|t|)` < 0.05)] <- "FC > 0.5"
+results$Color <- factor(results$Color,
+                        levels = c("NS or FC < 0.5", "P < 0.05",
+                                   "FC < -0.5", "FC > 0.5"))
+
+# pick top genes for either side of volcano to label
+# order genes for convenience:
+results$invert_P <- (-log10(results$`Pr(>|t|)`)) * sign(results$Estimate)
+top_g <- c()
+for(cond in c("CD45")) {
+    ind <- results$Subset == cond
+    top_g <- c(top_g,
+               results[ind, 'Gene'][
+                   order(results[ind, 'Estimate'], decreasing = TRUE)[1:20]],
+               results[ind, 'Gene'][
+                   order(results[ind, 'Estimate'], decreasing = FALSE)[1:20]])
+}
+top_g <- unique(top_g)
+results <- results[, -1*ncol(results)] # remove invert_P from matrix
+
+# Graph results
+p = ggplot(results,
+       aes(x = Estimate, y = -log10(`Pr(>|t|)`),
+           color = Color, label = Gene)) +
+    geom_vline(xintercept = c(0.5, -0.5), lty = "dashed") +
+    geom_hline(yintercept = -log10(0.05), lty = "dashed") +
+    geom_point() +
+    labs(x = "Enriched in contrl <- log2(FC) -> Enriched in colitis",
+         y = "Significance, -log10(P)",
+         color = "Significance") +
+    scale_color_manual(values = c(`FC > 0.5` = "firebrick1",
+                                  `FC < -0.5` = "royalblue2",
+                                  `P < 0.05` = "orange2",
+                                  `NS or FC < 1` = "gray"),
+                       guide = guide_legend(override.aes = list(size = 4))) +
+    scale_y_continuous(expand = expansion(mult = c(0,0.05))) +
+    ggrepel::geom_text_repel(data = subset(results, Gene %in% top_g & results$`Pr(>|t|)` < 0.05),
+                    size = 4, point.padding = 0.15, color = "black",
+                    min.segment.length = .1, box.padding = .2, lwd = 2,
+                    max.overlaps = 100) +
+    theme_bw(base_size = 16) +
+    theme(legend.position = "bottom") +
+    facet_wrap(~Subset, scales = "free_y")
+ggsave('../plots/large_my_roi_CD45_top15_v2.png', height = 6, width = 7.2)
+ggsave('../plots/large_my_roi_CD45_top15_v2.svg', height = 3, width = 3.6)
+p
+
+
+results = results_lg_mph
+results = subset(results, !(results$Gene %in% c("PAN", "Pro", "Firm", "Bac")))
+
+# cd45 in small intestine
+results = subset(results, results$Subset == 'Ecad')
+results$Estimate = -1 * results$Estimate # reverse direction
+results$Color <- "NS or FC < 0.5"
+results$Color[results$`Pr(>|t|)` < 0.05] <- "P < 0.05"
+results$Color[((results$Estimate) < -0.5) & (results$`Pr(>|t|)` < 0.05)] <- "FC < -0.5"
+results$Color[((results$Estimate) > 0.5) & (results$`Pr(>|t|)` < 0.05)] <- "FC > 0.5"
+results$Color <- factor(results$Color,
+                        levels = c("NS or FC < 0.5", "P < 0.05",
+                                   "FC < -0.5", "FC > 0.5"))
+
+# pick top genes for either side of volcano to label
+# order genes for convenience:
+results$invert_P <- (-log10(results$`Pr(>|t|)`)) * sign(results$Estimate)
+top_g <- c()
+for(cond in c("Ecad")) {
+    ind <- results$Subset == cond
+    top_g <- c(top_g,
+               results[ind, 'Gene'][
+                   order(results[ind, 'Estimate'], decreasing = TRUE)[1:20]],
+               results[ind, 'Gene'][
+                   order(results[ind, 'Estimate'], decreasing = FALSE)[1:20]])
+}
+top_g <- unique(top_g)
+results <- results[, -1*ncol(results)] # remove invert_P from matrix
+
+# Graph results
+p = ggplot(results,
+       aes(x = Estimate, y = -log10(`Pr(>|t|)`),
+           color = Color, label = Gene)) +
+    geom_vline(xintercept = c(0.5, -0.5), lty = "dashed") +
+    geom_hline(yintercept = -log10(0.05), lty = "dashed") +
+    geom_point() +
+    labs(x = "Enriched in contrl <- log2(FC) -> Enriched in colitis",
+         y = "Significance, -log10(P)",
+         color = "Significance") +
+    scale_color_manual(values = c(`FC > 0.5` = "firebrick1",
+                                  `FC < -0.5` = "royalblue2",
+                                  `P < 0.05` = "orange2",
+                                  `NS or FC < 1` = "gray"),
+                       guide = guide_legend(override.aes = list(size = 4))) +
+    scale_y_continuous(expand = expansion(mult = c(0,0.05))) +
+    ggrepel::geom_text_repel(data = subset(results, Gene %in% top_g & results$`Pr(>|t|)` < 0.05),
+                    size = 4, point.padding = 0.15, color = "black",
+                    min.segment.length = .1, box.padding = .2, lwd = 2,
+                    max.overlaps = 100) +
+    theme_bw(base_size = 16) +
+    theme(legend.position = "bottom") +
+    facet_wrap(~Subset, scales = "free_y")
+ggsave('../plots/large_my_roi_Ecad_top15_v2.png', height = 6, width = 7.2)
+ggsave('../plots/large_my_roi_Ecad_top15_v2.svg', height = 3, width = 3.6)
+p
+
+```
+
+## save this out in case future usage
+```{r}
+write.csv(results_lg_mph, '../data/myeloid_deg_allnonfilt.csv')
+```
+
+
+
+######## gsea analysis based on DEG results
+
+
+```{r}
+degall_stdr = results_lg_mph
+removg = c("PAN", "Pro", "Firm", "Bac")
+`%notin%` = Negate(`%in%`)
+degall_stdr = subset(degall_stdr, degall_stdr$Gene %notin% removg)
+
+# stupid subset lets gooo
+cd45_deg = subset(degall_stdr, degall_stdr$Subset == 'CD45')
+ecad_deg = subset(degall_stdr, degall_stdr$Subset == 'Ecad')
+
+################### prep input
+
+ll = list(cd45_deg, ecad_deg)
+nnl = c('cd45_deg', 'ecad_deg')
+
+########################## start gsea calc and save
+
+library(clusterProfiler)
+library(msigdb)
+
+## decide gene set
+
+#fullc2 = read.gmt("../data/c2.all.v2023.1.Hs.symbols.gmt")
+bp = read.gmt("../../dsp_related/m5.go.bp.v2023.1.Mm.symbols.gmt") # use mouse bp
+
+### startooo
+for (i in c(1:length(ll))){
+  subtemp = ll[[i]]
+  nn = nnl[i]
+  
+  #subtemp = subtemp[subtemp$`Pr(>|t|)` < 0.05 & subtemp$Gene %notin% filtgene,]
+  inputraw = subtemp[order(subtemp$Estimate, decreasing = TRUE),]
+  #low = subtemp[order(subtemp$Estimate, decreasing = FALSE)[c(1:50)],]
+  
+  ### high
+  input = inputraw$Estimate
+  names(input) = inputraw$Gene
+  #highres <- GSEA(input, TERM2GENE = fullc2, scoreType = "pos",pvalueCutoff = 1,eps = 0)
+  res <- GSEA(input, TERM2GENE = bp,pvalueCutoff = 0.05, eps = 0)
+  
+  #savedir2 = paste0('../result/gsea_c2/',nn, '_EBVneg_GSEA.csv')
+  savedir1 = paste0('../data/gsea/',nn, '_bp_gsea.csv')
+  #savedir2 = paste0('../result/gsea_bp/',nn, '_EBVneg_GSEA.csv')
+  write.csv(res, savedir1, row.names = F)
+  #write.csv(lowres, savedir2, row.names = F)
+}
+
+```
+
+
+###### GSEA plot (shown in fig 6 main) code:
+
+### target GSEA pathways were directly selected from the GSEA analysis performed above
+
+
+```{r}
+library(ggplot2)
+library(stringr)
+
+targets1 = c('GOBP_MACROPHAGE_ACTIVATION',
+'GOBP_MACROPHAGE_DIFFERENTIATION',
+'GOBP_MACROPHAGE_CYTOKINE_PRODUCTION'
+)
+
+targets2 = c('GOBP_SEQUESTERING_OF_METAL_ION',
+'GOBP_HYDROGEN_PEROXIDE_METABOLIC_PROCESS',
+'GOBP_ANTIMICROBIAL_HUMORAL_IMMUNE_RESPONSE_MEDIATED_BY_ANTIMICROBIAL_PEPTIDE'
+)
+
+res = read.csv('../data/gsea/cd45_deg_bp_gsea.csv')
+res = subset(res, res$Description %in% targets1)
+res2 = read.csv('../data/gsea/ecad_deg_bp_gsea.csv')
+res2 = subset(res2, res2$Description %in% targets2)
+resall = rbind(res, res2)
+
+resall$Description = gsub('GOBP_', '', resall$Description)
+resall$NES = -1 * resall$NES
+resall$Description <- factor(resall$Description,
+        levels = c('MACROPHAGE_CYTOKINE_PRODUCTION',
+                   'MACROPHAGE_DIFFERENTIATION',
+                   'MACROPHAGE_ACTIVATION',
+                   'HYDROGEN_PEROXIDE_METABOLIC_PROCESS',
+                   'ANTIMICROBIAL_HUMORAL_IMMUNE_RESPONSE_MEDIATED_BY_ANTIMICROBIAL_PEPTIDE',
+                   'SEQUESTERING_OF_METAL_ION'))
+
+#resall = resall[order(resall$NES, decreasing = F),]
+
+###
+p = ggplot(data = resall, aes(x = NES, y = Description, 
+                               color = log10(pvalue), size = setSize)) + 
+  geom_point() +
+  scale_color_gradient(low = "red", high = "blue") +
+  theme_bw() + 
+  ylab("") + 
+  xlab("") + 
+  ggtitle("GSEA_co")
+ggsave('../plots/gsea_macrophage_regs_10.svg', height = 5, width = 10)
+p
+
+```
+
+

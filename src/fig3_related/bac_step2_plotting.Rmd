@@ -1,0 +1,77 @@
+---
+title: "mibi_bacteria_violin"
+output: html_document
+---
+
+
+Plotting script for MIBI bacteria localized metrics.
+
+```{r}
+library(stringr)
+library(ggplot2)
+library(dplyr)
+
+df = read.csv('../../../final_data/bac_csv/nbhd_ratioV1.csv')
+df$treatment = str_sub(df$run, -7, -7)
+
+## more meta
+meta_mibi = read.csv('../../../../../meta_link/meta_mibi_dsp.csv')
+colnames(meta_mibi) = c('x', 'run', 'fov', 'location', 'd-ecad', 'd-cd45', 'd-bac', 'id1', 'id2', 'id3')
+
+## combine two dataframes
+df2  = left_join(df, meta_mibi, by = c('run', 'fov'))
+
+## we only check large intestine since not many bacteria in large
+temp = subset(df2, df2$location == 'Large')
+
+p = ggplot(temp, aes(x=treatment, y=log10(rmll), fill = treatment)) +
+  geom_violin(trim=FALSE, color = 'grey') + scale_fill_manual(values=c("#39568CFF", "#DCE319FF")) +
+  geom_boxplot(width=0.1, fill = 'white', color = 'darkgrey') + theme_classic() +
+  geom_point(position = position_jitter(seed = 1, width = 0.1), size = 0.5)
+ggsave('./plots/logratiomed_large_dec5.svg', height = 3, width = 3.6)
+p
+```
+
+```{r}
+# access statistic test for comparison
+t.test(data = temp, log10(rmll) ~ treatment)
+```
+
+
+
+
+
+```{r}
+df = read.csv('../../../final_data/bac_csv/nbhd_entroV1.csv')
+df$treatment = str_sub(df$run, -7, -7)
+
+## more meta
+meta_mibi = read.csv('../../../../../meta_link/meta_mibi_dsp.csv')
+colnames(meta_mibi) = c('x', 'run', 'fov', 'location', 'd-ecad', 'd-cd45', 'd-bac', 'id1', 'id2', 'id3')
+
+## combine two dataframes
+df2  = left_join(df, meta_mibi, by = c('run', 'fov'))
+
+## we only check large intestine since not many bacteria in large
+temp = subset(df2, df2$location == 'Large')
+p = ggplot(temp, aes(x=treatment, y=entro, fill = treatment)) +
+  geom_violin(trim=FALSE, color = 'grey') +
+  scale_fill_manual(values=c("#39568CFF", "#DCE319FF")) +
+  geom_boxplot(width=0.1, fill = 'white', color = 'darkgrey', outlier.shape = NA) + theme_classic()+
+  geom_point(position = position_jitter(seed = 1, width = 0.1), size = 0.5)
+ggsave('./plots/entro_large_dec5.svg', height = 3, width = 3.6)
+p
+```
+
+
+```{r}
+# access t statistic for comparison
+t.test(data = temp, entro ~ treatment)
+```
+
+
+
+
+
+
+

@@ -1,0 +1,107 @@
+---
+title: "violin_enzyme"
+output: html_document
+---
+
+Violin plot for enzyme (related to glycan expresson and modification) expression, in the supp figures of manuscript.
+
+The target enzymes were picked because significant (p.adj < 0.05) based on previous DEG analysis from DSP data (code available in the respective folder).
+
+
+```{r}
+library(ggplot2)
+## read in dsp data
+
+dsp_counts = read.csv('../../dsp_related/final_data/microdsp_q3Counts.csv')
+sampname = dsp_counts$X
+## read in meta data for dsp
+meta = read.table("../../dsp_related/final_data/meta_analys_use.txt", sep = '\t', header = T, na.strings=c("","NA"))
+## need to remove some samples since no coutns somehow
+meta = meta[meta$Sample_ID %in% sampname,]
+sampnametarget = meta$Sample_ID[meta$slide.name != '0117-BCR' &
+                                  meta$segment != 'Full ROI' &
+                                  meta$slide.name != 'No Template Control']# sample names for wta analysis
+meta_host = meta[meta$slide.name != '0117-BCR' &
+                                  meta$segment != 'Full ROI' &
+                                  meta$slide.name != 'No Template Control',]# sample names for wta analysis
+meta_host$treatment = substr(meta_host$tag2, 0, 1)
+dsp_counts = dsp_counts[match(sampnametarget, sampname), ]
+dsp_counts$X = NULL
+
+###
+full_meta = read.csv('../../../meta_link/meta_mibi_dsp.csv', na.strings=c("","NA"))
+colnames(full_meta)[2] = "run"
+colnames(full_meta)[3] = "fov"
+```
+
+
+```{r}
+# get large Ecad gene expression
+tl = subset(full_meta$DSP_Ecad_name, full_meta$location == 'Large')
+id_i = tl[!is.na(tl)]
+temp = subset(dsp_counts, meta_host$Sample_ID %in% id_i)
+temp_meta = subset(meta_host, meta_host$Sample_ID %in% id_i)
+
+#target_g = c('Mgat3', 'Mgat4a', 'Mgat4b', 'Mgat5', 'Fut2', 'B4galt1', 'Manba')
+target_g = c('Fut2', 'B4galt1', 'Manba')
+
+i = 0
+for (g in target_g){
+  i = i + 1
+  tt = data.frame(gg = temp[g], treat = temp_meta$treatment)
+  colnames(tt) = c('g','treat')
+  
+  p = ggplot(tt, aes(x=treat, y=g, fill = treat)) +
+  geom_violin(trim=FALSE, color = 'grey') + 
+  geom_boxplot(width=0.1, fill = 'white', color = 'darkgrey', outlier.shape = NA) + theme_classic() +
+  theme_classic() + scale_fill_manual(values=c("#39568CFF", "#DCE319FF")) +
+  geom_point(position = position_jitter(seed = 1, width = 0.1), size = 0.5) +
+  theme(legend.position = "none")
+  #ggsave('./plots/entro_large_box_nout.svg', height = 3, width = 3.6)
+  assign(paste0('p', as.character(i)), p)
+}
+
+library(patchwork)
+
+pp = wrap_plots(list(p1,p2,p3), ncol = 4)
+ggsave('../plots/large_enzyme.svg', width = 10, height = 3)
+pp
+```
+
+```{r}
+# get large Ecad gene expression
+tl = subset(full_meta$DSP_Ecad_name, full_meta$location == 'Small')
+id_i = tl[!is.na(tl)]
+temp = subset(dsp_counts, meta_host$Sample_ID %in% id_i)
+temp_meta = subset(meta_host, meta_host$Sample_ID %in% id_i)
+
+target_g = c('Mgat3', 'Mgat4a', 'Mgat4b', 'Mgat5', 'Fut2', 'B4galt1', 'Manba')
+#target_g = c('Fut2', 'B4galt1', 'Manba')
+
+i = 0
+for (g in target_g){
+  i = i + 1
+  tt = data.frame(gg = temp[g], treat = temp_meta$treatment)
+  colnames(tt) = c('g','treat')
+  
+  p = ggplot(tt, aes(x=treat, y=g, fill = treat)) +
+  geom_violin(trim=FALSE, color = 'grey') + 
+  geom_boxplot(width=0.1, fill = 'white', color = 'darkgrey', outlier.shape = NA) + theme_classic() +
+  theme_classic() + scale_fill_manual(values=c("#39568CFF", "#DCE319FF")) +
+  geom_point(position = position_jitter(seed = 1, width = 0.1), size = 0.5) +
+  theme(legend.position = "none")
+  #ggsave('./plots/entro_large_box_nout.svg', height = 3, width = 3.6)
+  assign(paste0('p', as.character(i)), p)
+}
+
+library(patchwork)
+
+pp = wrap_plots(list(p1,p2,p3,p4,p5,p6,p7), ncol = 4)
+ggsave('../plots/small_enzyme.svg', width = 10, height = 6)
+pp
+```
+
+
+
+
+

@@ -1,0 +1,261 @@
+---
+title: "glycan_firstTest"
+output: html_document
+---
+
+Once we extract the per-tissue level glycan information, we can compare them between groups
+
+Figure 6c.
+
+```{r}
+## first read in extracted data
+
+df = read.csv('../Extracted_sigNormsize_all.csv')
+df_meta = read.csv('../maldi_metaV2.csv')
+df_meta = df_meta[!duplicated(df_meta), ]
+df_meta = df_meta[match(df$maldiID, df_meta$MaldiID),]
+```
+
+Since on each slide, we have additional human TMA serving as control tissues.
+We use the glycan signals from these same human TMAs to create a baseline for each glycan signal
+And based on that normalize signals across slides for quantitative analysis.
+
+
+```{r}
+## first task: normalize based on slides
+df_meta$slide = substr(df_meta$MaldiID,1,2)
+
+## get control spot for normalization
+## default using slide 1 as standard
+n1 = list()
+n2 = list()
+n3 = list()
+n4 = list()
+
+slidesll = unique(df_meta$slide)
+for (i in c(1:length(slidesll))){
+  
+  ## n1 contrl point
+  temp1 = list(as.numeric(df[df_meta$slide == slidesll[i] & df_meta$location == 'N1',c(3:40)]))
+  n1 = c(n1, temp1)
+  
+  # n2
+  temp1 = list(as.numeric(df[df_meta$slide == slidesll[i] & df_meta$location == 'N2',c(3:40)]))
+  n2 = c(n2, temp1)
+  
+  # n3
+  temp1 = list(as.numeric(df[df_meta$slide == slidesll[i] & df_meta$location == 'N3',c(3:40)]))
+  n3 = c(n3, temp1)
+  
+  # n4
+  temp1 = list(as.numeric(df[df_meta$slide == slidesll[i] & df_meta$location == 'N4',c(3:40)]))
+  n4 = c(n4, temp1)
+  
+}
+
+#unlist(mapply("/",n1[[2]],n1[[1]],SIMPLIFY = FALSE))
+```
+
+
+```{r}
+## create the full list, for ratio between 2 and 1
+r1 = unlist(mapply("/",n1[[2]],n1[[1]],SIMPLIFY = FALSE))
+r2 = unlist(mapply("/",n2[[2]],n2[[1]],SIMPLIFY = FALSE))
+r3 = unlist(mapply("/",n3[[2]],n3[[1]],SIMPLIFY = FALSE))
+r4 = unlist(mapply("/",n4[[2]],n4[[1]],SIMPLIFY = FALSE))
+
+n = length(r1)
+r12 = list()
+for (i in c(1:n)){
+  r12 = c(r12, mean(c(r1[i], r2[i], r3[i], r4[i])))
+}
+r12 = unlist(r12)
+
+## create the full list, for ratio between 3 and 1
+r1 = unlist(mapply("/",n1[[2]],n1[[1]],SIMPLIFY = FALSE))
+r2 = unlist(mapply("/",n2[[2]],n2[[1]],SIMPLIFY = FALSE))
+r3 = unlist(mapply("/",n3[[2]],n3[[1]],SIMPLIFY = FALSE))
+r4 = unlist(mapply("/",n4[[2]],n4[[1]],SIMPLIFY = FALSE))
+
+n = length(r1)
+r13 = list()
+for (i in c(1:n)){
+  r13 = c(r13, mean(c(r1[i], r2[i], r3[i], r4[i])))
+}
+r13 = unlist(r13)
+
+## create the full list, for ratio between 4 and 1
+r1 = unlist(mapply("/",n1[[4]],n1[[1]],SIMPLIFY = FALSE))
+r2 = unlist(mapply("/",n2[[4]],n2[[1]],SIMPLIFY = FALSE))
+r3 = unlist(mapply("/",n3[[4]],n3[[1]],SIMPLIFY = FALSE))
+r4 = unlist(mapply("/",n4[[4]],n4[[1]],SIMPLIFY = FALSE))
+
+n = length(r1)
+r14 = list()
+for (i in c(1:n)){
+  r14 = c(r14, mean(c(r1[i], r2[i], r3[i], r4[i])))
+}
+r14 = unlist(r14)
+
+```
+
+
+```{r}
+## normalize all 4 slides
+df1 = subset(df, df_meta$slide == 's1')
+df1_meta = subset(df_meta, df_meta$slide == 's1')
+# no norm as this use as standard
+
+df2 = subset(df, df_meta$slide == 's2')
+df2[,c(3:40)] = sweep(df2[,c(3:40)], 2, r12, '*')
+df2_meta = subset(df_meta, df_meta$slide == 's2')
+
+df3 = subset(df, df_meta$slide == 's3')
+df3[,c(3:40)] = sweep(df3[,c(3:40)], 2, r13, '*')
+df3_meta = subset(df_meta, df_meta$slide == 's3')
+
+df4 = subset(df, df_meta$slide == 's4')
+df4[,c(3:40)] = sweep(df4[,c(3:40)], 2, r14, '*')
+df4_meta = subset(df_meta, df_meta$slide == 's4')
+
+
+########## simple normalzation done
+df_normed = do.call('rbind',list(df1, df2, df3, df4))
+df_normed_meta = do.call('rbind', list(df1_meta, df2_meta, df3_meta, df4_meta))
+```
+
+## save out for pixe cross section normalization
+
+```{r}
+ratio_df = data.frame(r12 = r12, r13 = r13, r14 = r14)
+ratio_df = as.data.frame(t(ratio_df))
+colnames(ratio_df) = colnames(df)[3:40]
+write.csv(ratio_df, '../cross_slide_ratio.csv', row.names = F)
+
+```
+
+
+
+Now below create comparisons:
+
+start comparing, lets do small intestine ctrl vs dss
+
+```{r}
+input1 = subset(df, df_meta$treat == 'C' & df_meta$location == 'Small')
+input2 = subset(df, df_meta$treat == 'T' & df_meta$location == 'Small')
+
+targets = colnames(df2[,c(3:40)])
+pres = list()
+fc2res = list()
+n = length(targets)
+for (i in c(1:n)){
+  ttest = t.test(input1[,targets[i]], input2[,targets[i]])
+  fc2 = log2(as.numeric(ttest$estimate[2]/ ttest$estimate[1])) # + means more in dss
+  pres = c(pres, ttest$p.value)
+  fc2res = c(fc2res, fc2)
+}
+pres = unlist(pres)
+fc2res = unlist(fc2res)
+padjres = p.adjust(pres, method = 'BH')
+
+welch_res_small = data.frame(target = targets, praw = pres, padj = padjres, fc2 = fc2res)
+```
+
+
+#### large intestine version
+
+
+```{r}
+input1 = subset(df, df_meta$treat == 'C' & df_meta$location == 'Large')
+input2 = subset(df, df_meta$treat == 'T' & df_meta$location == 'Large')
+
+targets = colnames(df2[,c(3:40)])
+pres = list()
+fc2res = list()
+n = length(targets)
+for (i in c(1:n)){
+  ttest = t.test(input1[,targets[i]], input2[,targets[i]])
+  fc2 = log2(as.numeric(ttest$estimate[2]/ ttest$estimate[1])) # + means more in dss
+  pres = c(pres, ttest$p.value)
+  fc2res = c(fc2res, fc2)
+}
+pres = unlist(pres)
+fc2res = unlist(fc2res)
+padjres = p.adjust(pres, method = 'BH')
+
+welch_res_large = data.frame(target = targets, praw = pres, padj = padjres, fc2 = fc2res)
+```
+
+
+
+
+Base on the above analysis, plot out the most significant changed glycans:
+
+
+```{r}
+
+### for large, selected based on 1. sig for padj; 2, most change
+targets = c('Hex4HexNAc3', 'Hex4HexNAc4', 'Hex5HexNAc5', 'Hex5HexNAc4', 'Hex6dHex1HexNAc5')
+temp1 = df_normed[,targets]
+tempplot = cbind(temp1, df_meta)
+tempplot = subset(tempplot, tempplot$treat != 'N' & tempplot$location == 'Large')
+
+n = length(targets)
+
+for (i in c(1:n)){
+  
+  tempplot2 = tempplot[,c('treat',targets[i])]
+  colnames(tempplot2) = c('treat', 'target')
+  
+  p = ggplot(tempplot2, aes(x=treat, y=log(target), fill = treat)) +
+  geom_violin(trim=FALSE, color = 'grey') + 
+  geom_boxplot(width=0.1, fill = 'white', color = 'darkgrey', outlier.shape = NA) + theme_classic() +
+  theme_classic() + scale_fill_manual(values=c("#39568CFF", "#DCE319FF")) +
+  geom_point(position = position_jitter(seed = 1, width = 0.1), size = 0.5) +
+  theme(legend.position = "none")
+  #ggsave('./plots/entro_large_box_nout.svg', height = 3, width = 3.6)
+  assign(paste0('p', as.character(i)), p)
+}
+
+library(patchwork)
+
+pp = wrap_plots(list(p1,p2,p3,p4,p5), ncol = 5)
+ggsave('../plots/large_sig_glycans_updated.svg', width = 18, height = 3)
+pp
+```
+
+
+```{r}
+
+### for large, selected based on 1. sig for padj; 2, most change
+targets = c('Hex7HexNAc6', 'Hex5HexNAc5NeuAc1', 'Hex6dHex2HexNAc5', 'Hex5HexNAc6NeuAc1', 'Hex6HexNAc6')
+temp1 = df_normed[,targets]
+tempplot = cbind(temp1, df_meta)
+tempplot = subset(tempplot, tempplot$treat != 'N' & tempplot$location == 'Small')
+
+n = length(targets)
+
+for (i in c(1:n)){
+  
+  tempplot2 = tempplot[,c('treat',targets[i])]
+  colnames(tempplot2) = c('treat', 'target')
+  
+  p = ggplot(tempplot2, aes(x=treat, y=log(target), fill = treat)) +
+  geom_violin(trim=FALSE, color = 'grey') + scale_fill_manual(values=c("#39568CFF", "#DCE319FF")) +
+  geom_boxplot(width=0.1, fill = 'white', color = 'darkgrey', outlier.shape = NA) + 
+  theme_classic() + #scale_fill_manual(values=c("#39568CFF", "#DCE319FF")) +
+  geom_point(position = position_jitter(seed = 1, width = 0.1), size = 0.5) +
+  theme(legend.position = "none")
+  #ggsave('./plots/entro_large_box_nout.svg', height = 3, width = 3.6)
+  assign(paste0('p', as.character(i)), p)
+}
+
+library(patchwork)
+
+pp = wrap_plots(list(p1,p2,p3,p4,p5), ncol = 5)
+ggsave('../plots/small_sig_glycans_updated.svg', width = 18, height = 3)
+pp
+```
+
+
+

@@ -1,0 +1,425 @@
+---
+title: "pixie_glycan_plot"
+output: html_document
+---
+
+Analysis and plotting related to glycan pixie results.
+
+
+First plot out some representative images with pixal clustering results:
+
+```{r}
+
+labelmap=tiff::readTIFF('../extracted/forHarm/pixie/Run4_oct11_k20_pixel_output_dir/rep/s3_2.tiff',
+                        as.is = T)
+labelmap_melt=melt(labelmap)
+labelmap_melt$value = as.factor(labelmap_melt$value)
+
+clr_pl = c('#000000','#e6194b', '#3cb44b', '#ffe119', '#4363d8', '#f58231', '#911eb4', '#46f0f0', '#f032e6', '#bcf60c', '#fabebe', '#008080', '#e6beff', '#9a6324', '#fffac8', '#800000', '#aaffc3', '#808000', '#ffd8b1', '#000075', '#808080')
+
+names(clr_pl) <- c("0", "1", "2", "3",'4','5','6',
+                     "7","8",'9','10','11','12','13',
+                     '14','15','16','17','18','19', '20'
+                     )
+
+temp_plot = ggplot(labelmap_melt, aes(x = X1, y = X2, fill = value)) +
+    geom_raster() +
+    scale_fill_manual(name = "value",values = clr_pl) +
+    labs(x=NULL, y=NULL, title=NULL) +
+    scale_x_discrete(expand=c(0,0)) +
+    scale_y_discrete(expand=c(0,0)) +
+    theme_void() +
+    coord_fixed() +
+    labs(x=NULL, y=NULL, title=NULL) +
+    theme(axis.text.y=element_blank(),
+          axis.text.x=element_blank(),
+          axis.ticks=element_blank(),
+          axis.title.x=element_blank(),
+          axis.title.y=element_blank(),
+          legend.position='none',
+          panel.background = element_blank(),
+          panel.grid = element_blank(),
+          title = element_blank(),
+          panel.grid.major = element_blank(),
+          panel.grid.minor = element_blank(),
+          panel.margin = unit(rep(-1.25,4),'null'),
+          plot.margin = unit(rep(-1.25,4),'lines'),
+          axis.ticks.length = unit(0,'cm'),
+          axis.ticks.margin = unit(0,'cm'),
+          panel.border = element_rect(colour = 'black', fill=NA, size=1))
+ggsave('../plots/s3_2_pixie.png', height = 6, width = 6.14)
+temp_plot
+
+```
+
+```{r}
+
+labelmap=tiff::readTIFF('../extracted/forHarm/pixie/Run4_oct11_k20_pixel_output_dir/rep/s2_3.tiff',
+                        as.is = T)
+labelmap_melt=melt(labelmap)
+labelmap_melt$value = as.factor(labelmap_melt$value)
+
+clr_pl = c('#000000','#e6194b', '#3cb44b', '#ffe119', '#4363d8', '#f58231', '#911eb4', '#46f0f0', '#f032e6', '#bcf60c', '#fabebe', '#008080', '#e6beff', '#9a6324', '#fffac8', '#800000', '#aaffc3', '#808000', '#ffd8b1', '#000075', '#808080')
+
+names(clr_pl) <- c("0", "1", "2", "3",'4','5','6',
+                     "7","8",'9','10','11','12','13',
+                     '14','15','16','17','18','19', '20'
+                     )
+
+temp_plot = ggplot(labelmap_melt, aes(x = X1, y = X2, fill = value)) +
+    geom_raster() +
+    scale_fill_manual(name = "value",values = clr_pl) +
+    labs(x=NULL, y=NULL, title=NULL) +
+    scale_x_discrete(expand=c(0,0)) +
+    scale_y_discrete(expand=c(0,0)) +
+    theme_void() +
+    coord_fixed() +
+    labs(x=NULL, y=NULL, title=NULL) +
+    theme(axis.text.y=element_blank(),
+          axis.text.x=element_blank(),
+          axis.ticks=element_blank(),
+          axis.title.x=element_blank(),
+          axis.title.y=element_blank(),
+          legend.position='none',
+          panel.background = element_blank(),
+          panel.grid = element_blank(),
+          title = element_blank(),
+          panel.grid.major = element_blank(),
+          panel.grid.minor = element_blank(),
+          panel.margin = unit(rep(-1.25,4),'null'),
+          plot.margin = unit(rep(-1.25,4),'lines'),
+          axis.ticks.length = unit(0,'cm'),
+          axis.ticks.margin = unit(0,'cm'),
+          panel.border = element_rect(colour = 'black', fill=NA, size=1))
+ggsave('../plots/s2_3_pixie.png', height = 6, width = 6.14)
+temp_plot
+
+```
+
+```{r}
+
+labelmap=tiff::readTIFF('../extracted/forHarm/pixie/Run4_oct11_k20_pixel_output_dir/rep/s1_3.tiff',
+                        as.is = T)
+labelmap_melt=melt(labelmap)
+labelmap_melt$value = as.factor(labelmap_melt$value)
+
+clr_pl = c('#000000','#e6194b', '#3cb44b', '#ffe119', '#4363d8', '#f58231', '#911eb4', '#46f0f0', '#f032e6', '#bcf60c', '#fabebe', '#008080', '#e6beff', '#9a6324', '#fffac8', '#800000', '#aaffc3', '#808000', '#ffd8b1', '#000075', '#808080')
+
+names(clr_pl) <- c("0", "1", "2", "3",'4','5','6',
+                     "7","8",'9','10','11','12','13',
+                     '14','15','16','17','18','19', '20'
+                     )
+
+temp_plot = ggplot(labelmap_melt, aes(x = X1, y = X2, fill = value)) +
+    geom_raster() +
+    scale_fill_manual(name = "value",values = clr_pl) +
+    labs(x=NULL, y=NULL, title=NULL) +
+    scale_x_discrete(expand=c(0,0)) +
+    scale_y_discrete(expand=c(0,0)) +
+    theme_void() +
+    coord_fixed() +
+    labs(x=NULL, y=NULL, title=NULL) +
+    theme(axis.text.y=element_blank(),
+          axis.text.x=element_blank(),
+          axis.ticks=element_blank(),
+          axis.title.x=element_blank(),
+          axis.title.y=element_blank(),
+          legend.position='none',
+          panel.background = element_blank(),
+          panel.grid = element_blank(),
+          title = element_blank(),
+          panel.grid.major = element_blank(),
+          panel.grid.minor = element_blank(),
+          panel.margin = unit(rep(-1.25,4),'null'),
+          plot.margin = unit(rep(-1.25,4),'lines'),
+          axis.ticks.length = unit(0,'cm'),
+          axis.ticks.margin = unit(0,'cm'),
+          panel.border = element_rect(colour = 'black', fill=NA, size=1))
+ggsave('../plots/s1_3_pixie.png', height = 6, width = 6.14)
+temp_plot
+
+```
+
+
+
+```{r}
+library(tiff)
+library(reshape)
+library(ggplot2)
+library(dplyr)
+
+labelmap=tiff::readTIFF('../extracted/forHarm/pixie/Run4_oct11_k20_pixel_output_dir/rep/s1_2.tiff',
+                        as.is = T)
+labelmap_melt=melt(labelmap)
+labelmap_melt$value = as.factor(labelmap_melt$value)
+
+clr_pl = c('#000000','#e6194b', '#3cb44b', '#ffe119', '#4363d8', '#f58231', '#911eb4', '#46f0f0', '#f032e6', '#bcf60c', '#fabebe', '#008080', '#e6beff', '#9a6324', '#fffac8', '#800000', '#aaffc3', '#808000', '#ffd8b1', '#000075', '#808080')
+
+names(clr_pl) <- c("0", "1", "2", "3",'4','5','6',
+                     "7","8",'9','10','11','12','13',
+                     '14','15','16','17','18','19', '20'
+                     )
+
+temp_plot = ggplot(labelmap_melt, aes(x = X1, y = X2, fill = value)) +
+    geom_raster() +
+    scale_fill_manual(name = "value",values = clr_pl) +
+    labs(x=NULL, y=NULL, title=NULL) +
+    scale_x_discrete(expand=c(0,0)) +
+    scale_y_discrete(expand=c(0,0)) +
+    theme_void() +
+    coord_fixed() +
+    labs(x=NULL, y=NULL, title=NULL) +
+    theme(axis.text.y=element_blank(),
+          axis.text.x=element_blank(),
+          axis.ticks=element_blank(),
+          axis.title.x=element_blank(),
+          axis.title.y=element_blank(),
+          legend.position='none',
+          panel.background = element_blank(),
+          panel.grid = element_blank(),
+          title = element_blank(),
+          panel.grid.major = element_blank(),
+          panel.grid.minor = element_blank(),
+          panel.margin = unit(rep(-1.25,4),'null'),
+          plot.margin = unit(rep(-1.25,4),'lines'),
+          axis.ticks.length = unit(0,'cm'),
+          axis.ticks.margin = unit(0,'cm'),
+          panel.border = element_rect(colour = 'black', fill=NA, size=1))
+ggsave('../plots/s1_2_pixie.png', height = 8, width = 10.5)
+temp_plot
+```
+
+```{r}
+
+labelmap=tiff::readTIFF('../extracted/forHarm/pixie/Run4_oct11_k20_pixel_output_dir/rep/s1_5.tiff',
+                        as.is = T)
+labelmap_melt=melt(labelmap)
+labelmap_melt$value = as.factor(labelmap_melt$value)
+
+clr_pl = c('#000000','#e6194b', '#3cb44b', '#ffe119', '#4363d8', '#f58231', '#911eb4', '#46f0f0', '#f032e6', '#bcf60c', '#fabebe', '#008080', '#e6beff', '#9a6324', '#fffac8', '#800000', '#aaffc3', '#808000', '#ffd8b1', '#000075', '#808080')
+
+names(clr_pl) <- c("0", "1", "2", "3",'4','5','6',
+                     "7","8",'9','10','11','12','13',
+                     '14','15','16','17','18','19', '20'
+                     )
+
+temp_plot = ggplot(labelmap_melt, aes(x = X1, y = X2, fill = value)) +
+    geom_raster() +
+    scale_fill_manual(name = "value",values = clr_pl) +
+    labs(x=NULL, y=NULL, title=NULL) +
+    scale_x_discrete(expand=c(0,0)) +
+    scale_y_discrete(expand=c(0,0)) +
+    theme_void() +
+    coord_fixed() +
+    labs(x=NULL, y=NULL, title=NULL) +
+    theme(axis.text.y=element_blank(),
+          axis.text.x=element_blank(),
+          axis.ticks=element_blank(),
+          axis.title.x=element_blank(),
+          axis.title.y=element_blank(),
+          legend.position='none',
+          panel.background = element_blank(),
+          panel.grid = element_blank(),
+          title = element_blank(),
+          panel.grid.major = element_blank(),
+          panel.grid.minor = element_blank(),
+          panel.margin = unit(rep(-1.25,4),'null'),
+          plot.margin = unit(rep(-1.25,4),'lines'),
+          axis.ticks.length = unit(0,'cm'),
+          axis.ticks.margin = unit(0,'cm'),
+          panel.border = element_rect(colour = 'black', fill=NA, size=1))
+ggsave('../plots/s1_5_pixie.png', height = 6, width = 6.14)
+temp_plot
+
+```
+
+```{r}
+
+labelmap=tiff::readTIFF('../extracted/forHarm/pixie/Run4_oct11_k20_pixel_output_dir/rep/s2_6.tiff',
+                        as.is = T)
+labelmap_melt=melt(labelmap)
+labelmap_melt$value = as.factor(labelmap_melt$value)
+
+clr_pl = c('#000000','#e6194b', '#3cb44b', '#ffe119', '#4363d8', '#f58231', '#911eb4', '#46f0f0', '#f032e6', '#bcf60c', '#fabebe', '#008080', '#e6beff', '#9a6324', '#fffac8', '#800000', '#aaffc3', '#808000', '#ffd8b1', '#000075', '#808080')
+
+names(clr_pl) <- c("0", "1", "2", "3",'4','5','6',
+                     "7","8",'9','10','11','12','13',
+                     '14','15','16','17','18','19', '20'
+                     )
+
+temp_plot = ggplot(labelmap_melt, aes(x = X1, y = X2, fill = value)) +
+    geom_raster() +
+    scale_fill_manual(name = "value",values = clr_pl) +
+    labs(x=NULL, y=NULL, title=NULL) +
+    scale_x_discrete(expand=c(0,0)) +
+    scale_y_discrete(expand=c(0,0)) +
+    theme_void() +
+    coord_fixed() +
+    labs(x=NULL, y=NULL, title=NULL) +
+    theme(axis.text.y=element_blank(),
+          axis.text.x=element_blank(),
+          axis.ticks=element_blank(),
+          axis.title.x=element_blank(),
+          axis.title.y=element_blank(),
+          legend.position='none',
+          panel.background = element_blank(),
+          panel.grid = element_blank(),
+          title = element_blank(),
+          panel.grid.major = element_blank(),
+          panel.grid.minor = element_blank(),
+          panel.margin = unit(rep(-1.25,4),'null'),
+          plot.margin = unit(rep(-1.25,4),'lines'),
+          axis.ticks.length = unit(0,'cm'),
+          axis.ticks.margin = unit(0,'cm'),
+          panel.border = element_rect(colour = 'black', fill=NA, size=1))
+ggsave('../plots/s2_6_pixie.png', height = 6, width = 6.14)
+temp_plot
+
+```
+
+
+```{r}
+pp = qplot(x=0:20, y = 1, fill=factor(0:20), geom="tile") +
+  scale_fill_manual(values = clr_pl) +
+  theme_void()+
+  theme(legend.position="none") 
+ggsave('../plots/pixie_color_legend.png')
+pp
+```
+
+
+Plot out pixie clustering glycan expression heatmap:
+
+
+```{r}
+hmdf = read.csv('../extracted/forHarm/pixie/Run4_oct11_k20_pixel_output_dir/pixel_channel_avg_meta_cluster.csv')
+#rownames(hmdf) = paste0('c',hmdf$pixel_meta_cluster)
+rownames(hmdf) = hmdf$pixel_meta_cluster_rename
+hmdf$count = NULL
+hmdf$pixel_meta_cluster = NULL
+hmdf$pixel_meta_cluster_rename = NULL
+hmdf = as.matrix(hmdf)
+hmdf = scale(hmdf)
+#capping zscore
+hmdf[hmdf > 2] = 2
+hmdf[hmdf < -2] = -2
+
+library(pheatmap)
+
+svg(file="../plots/pixie_oct12.svg",height = 7, width = 10)
+pheatmap(hmdf, cluster_rows=FALSE,
+         color=colorRampPalette(c("#FF00FF", "#000000", "#FFFF00"))(50))
+dev.off()
+
+pdf(file="../plots/pixie_oct12.pdf",height = 7, width = 10)
+pheatmap(hmdf, cluster_rows=FALSE,
+         color=colorRampPalette(c("#FF00FF", "#000000", "#FFFF00"))(50))
+dev.off()
+```
+
+
+
+########## now we do percentage histogram for pixal level clusters
+
+
+```{r}
+pixie_perc = read.csv('../results/pixie_perc.csv')
+
+#
+df_meta = read.csv('../maldi_metaV2.csv')
+df_meta = df_meta[!duplicated(df_meta), ]
+df_meta = df_meta[match(pixie_perc$maldiID, df_meta$MaldiID),]
+
+## add meta
+pixie_perc$treat = df_meta$treat
+pixie_perc$location = df_meta$location
+pixie_perc_sub = subset(pixie_perc, pixie_perc$treat != 'N')
+pixie_perc_sub$maldiID = NULL
+pixie_perc_sub %>% group_by(treat, location) %>% summarise_all(mean) -> pixie_sum
+
+library(reshape)
+pixie_sum_m = melt(as.data.frame(pixie_sum), id = c('treat', 'location'))
+
+
+clr_pl = c('#e6194b', '#3cb44b', '#ffe119', '#4363d8', '#f58231', '#911eb4', '#46f0f0', '#f032e6', '#bcf60c', '#fabebe', '#008080', '#e6beff', '#9a6324', '#fffac8', '#800000', '#aaffc3', '#808000', '#ffd8b1', '#000075', '#808080')
+
+names(clr_pl) <- c( "c1", "c2", "c3",'c4','c5','c6',
+                     "c7","c8",'c9','c10','c11','c12','c13',
+                     'c14','c15','c16','c17','c18','c19', 'c20'
+                     )
+
+pbar = ggplot(data=pixie_sum_m, aes(x=interaction(treat, location), y=value, fill=variable)) +
+  geom_bar(stat="identity") + theme_classic() +
+  scale_fill_manual(values = clr_pl)
+
+ggsave('../plots/pixie_perc_bar.svg', height = 3.5, width = 5) # per col 0.5, height 3.5 
+#ggsave('../plots/fullBar_mibi_cell.png', height = 3.5, width = 5) # per col 0.5, height 3.5 
+pbar
+```
+
+Also get test statistic for the percantage change:
+
+```{r}
+## also need to do test and see if sig diff
+pixie_perc = read.csv('../results/pixie_perc.csv')
+
+#
+df_meta = read.csv('../maldi_metaV2.csv')
+df_meta = df_meta[!duplicated(df_meta), ]
+df_meta = df_meta[match(pixie_perc$maldiID, df_meta$MaldiID),]
+
+## add meta
+pixie_perc$treat = df_meta$treat
+pixie_perc$location = df_meta$location
+pixie_perc_sub = subset(pixie_perc, pixie_perc$treat != 'N')
+pixie_perc_sub$maldiID = NULL
+
+
+### t test
+t_r = list()
+t_p = list()
+
+input = subset(pixie_perc_sub, pixie_perc_sub$location == 'Large')
+n = dim(input)[2] - 2 # remove last two column
+for (i in c(1:n)){
+  x = subset(input, input$treat == 'T')
+  y = subset(input, input$treat == 'C')
+  res = t.test(x[,i], y[,i])
+  t_r = c(t_r, as.numeric(res$estimate[1] / res$estimate[2]))
+  t_p = c(t_p, as.numeric(res$p.value))
+}
+
+t_r = unlist(t_r)
+t_p = unlist(t_p)
+t_p = p.adjust(t_p, method = 'BH')
+
+responsedf = data.frame(t_r = t_r, t_padj = t_p, nameid = colnames(input)[c(1:20)])
+head(responsedf)
+```
+
+Also get test statistic for the percantage change:
+
+```{r}
+### t test
+t_r = list()
+t_p = list()
+
+input = subset(pixie_perc_sub, pixie_perc_sub$location == 'Small')
+n = dim(input)[2] - 2 # remove last two column
+for (i in c(1:n)){
+  x = subset(input, input$treat == 'T')
+  y = subset(input, input$treat == 'C')
+  res = t.test(x[,i], y[,i])
+  t_r = c(t_r, as.numeric(res$estimate[1] / res$estimate[2]))
+  t_p = c(t_p, as.numeric(res$p.value))
+}
+
+t_r = unlist(t_r)
+t_p = unlist(t_p)
+t_p = p.adjust(t_p, method = 'BH')
+
+responsedf = data.frame(t_r = t_r, t_padj = t_p, nameid = colnames(input)[c(1:20)])
+head(responsedf)
+# < 1 means less in treatment
+```
+

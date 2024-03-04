@@ -1,0 +1,168 @@
+---
+title: "GEP_corr_myleoid"
+output: html_document
+---
+
+Previously we have done cNMF analysis on the dsp data, and acquired the GEP scores.
+
+In this script we calculate the correlation of these gene programs between paired Ecad and CD45 regions.
+
+And related downstream analysis.
+
+
+```{r}
+cnmf_un = read.csv('../data/cnmf35_usage.csv')
+meta = read.csv('../data/myeloid_highlow_meta.csv')
+colnames(cnmf_un) = gsub('Usage', 'Program', colnames(cnmf_un))
+```
+
+```{r}
+library(RColorBrewer)
+## make color break list
+l = 0.8
+r = -0.6
+breaksList = seq(r, l, by = 0.1)
+
+## get high groups
+meta2 = subset(meta, meta$state == 'High')
+df_cd45 = cnmf_un[match(meta2$cd45,cnmf_un$Unnamed..0), ]
+df_cd45$Unnamed..0 = NULL
+df_ecad = cnmf_un[match(meta2$ecad,cnmf_un$Unnamed..0), ]
+df_ecad$Unnamed..0 = NULL
+
+k = 35
+## correlation
+library(CCA)
+test = matcor(df_cd45, df_ecad)
+plot_test = test$XYcor[c(1:k),c((k+1):(2*k))]
+# remove rows or columns with all NAs
+plot_test = plot_test[rowSums(is.na(plot_test)) != ncol(plot_test), ]
+plot_test = plot_test[,colSums(is.na(plot_test)) != nrow(plot_test) ]
+plot_test[plot_test> l] = l
+plot_test[plot_test< r] = r
+
+library(pheatmap)
+
+pdf(file="../plots/pheatmap_cnmf_gp35_high_cap_nov27.pdf",height = 20, width = 20)
+pheatmap(plot_test,
+         color = colorRampPalette(rev(brewer.pal(n = 7, name = "RdYlBu")))(length(breaksList)), 
+         breaks = breaksList)
+dev.off()
+```
+
+```{r}
+hist(unlist(plot_test), breaks = 60)
+```
+
+
+```{r}
+## get high groups
+meta2 = subset(meta, meta$state == 'Low' & meta$loc == 'Large')
+df_cd45 = cnmf_un[match(meta2$cd45,cnmf_un$Unnamed..0), ]
+df_cd45$Unnamed..0 = NULL
+df_ecad = cnmf_un[match(meta2$ecad,cnmf_un$Unnamed..0), ]
+df_ecad$Unnamed..0 = NULL
+
+k = 35
+## correlation
+library(CCA)
+test = matcor(df_cd45, df_ecad)
+plot_test = test$XYcor[c(1:k),c((k+1):(2*k))]
+# remove rows or columns with all NAs
+plot_test = plot_test[rowSums(is.na(plot_test)) != ncol(plot_test), ]
+plot_test = plot_test[,colSums(is.na(plot_test)) != nrow(plot_test) ]
+plot_test[plot_test> l] = l
+plot_test[plot_test< r] = r
+
+library(pheatmap)
+
+pdf(file="../plots/pheatmap_cnmf_gp35_low_cap_nov27.pdf",height = 20, width = 20)
+pheatmap(plot_test,
+         color = colorRampPalette(rev(brewer.pal(n = 7, name = "RdYlBu")))(length(breaksList)), 
+         breaks = breaksList)
+dev.off()
+```
+
+
+Below we interpretate the process (gene pathways) involved in the interaction hotspots we identified.
+
+```{r}
+
+# example hot spot 1
+cd45_g = c(7,27)
+ecad_g = c(7,10,25,26)
+
+################ based on the top 10 genes in each gene program
+targets = cd45_g
+temp = list()
+for (item in targets){
+  temp = c(temp, topg[c(1:10),item])
+}
+targets = ecad_g
+for (item in targets){
+  temp = c(temp, topg[c(1:10),item])
+}
+algg = unique(unlist(temp))
+
+#print(alg1)
+enriched <- enrichr(algg, dbs)
+a = enriched$GO_Biological_Process_2015
+print(enriched$GO_Biological_Process_2015$Term[c(1:10)])
+
+```
+
+```{r}
+# plot the most significantly enriched gene programs in this hotspot
+library(ggplot2)
+plotdf = enriched$GO_Biological_Process_2015
+plotdf = plotdf[order(plotdf$P.value),]
+plotdf$Term = gsub('\\(GO.*\\)', '', plotdf$Term)
+plotdf$Term <- factor(plotdf$Term, levels = plotdf$Term[order(plotdf$P.value, decreasing = T)])
+plotdf = plotdf[c(1:5),]
+p <- ggplot(plotdf, aes(Term, -log10(P.value))) +
+  geom_bar(stat = "identity", width = 0.5) + coord_flip() + theme_bw() + scale_x_discrete()
+ggsave('../plots/cnmf_gsea_spot1.svg', height = 2.8, width = 6)
+p
+```
+
+
+```{r}
+
+# example hotspot 2
+cd45_g = c(11,12,17)
+ecad_g = c(4,12,15)
+
+################
+targets = cd45_g
+temp = list()
+for (item in targets){
+  temp = c(temp, topg[c(1:10),item])
+}
+targets = ecad_g
+for (item in targets){
+  temp = c(temp, topg[c(1:10),item])
+}
+algg = unique(unlist(temp))
+
+#print(alg1)
+enriched <- enrichr(algg, dbs)
+a = enriched$GO_Biological_Process_2015
+#print(enriched$GO_Biological_Process_2015$Term[c(1:10)])
+###########
+
+```
+
+```{r}
+library(ggplot2)
+plotdf = enriched$GO_Biological_Process_2015
+plotdf = plotdf[order(plotdf$P.value),]
+plotdf$Term = gsub('\\(GO.*\\)', '', plotdf$Term)
+plotdf$Term <- factor(plotdf$Term, levels = plotdf$Term[order(plotdf$P.value, decreasing = T)])
+plotdf = plotdf[c(1,2,4,6,7),] # remove gene terms that are the same meaning
+p <- ggplot(plotdf, aes(Term, -log10(P.value))) +
+  geom_bar(stat = "identity", width = 0.5) + coord_flip() + theme_bw() + scale_x_discrete()
+ggsave('../plots/cnmf_gsea_spot2.svg', height = 2.8, width = 6)
+p
+```
+
+

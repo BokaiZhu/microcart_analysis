@@ -1,0 +1,515 @@
+---
+title: "mibi_cluster_final"
+output: html_document
+---
+
+In this script we perform cell type annotation view seurat louvain clustering. Also contains cell type related analysis and plotting presented in figure 3.
+
+```{r}
+# two runs combine them
+df1 = read.csv('../data/celldf_batch1.csv')
+df2 = read.csv('../data/celldf_batch2.csv')
+df12 = rbind(df1, df2) # 130k unfiltered cells
+```
+
+
+```{r}
+# first check cell size
+ggplot(df12, aes(x=size)) + geom_histogram(binwidth = 20)+
+  scale_x_continuous(breaks = scales::pretty_breaks(n = 10))
+```
+
+```{r}
+## too large cell removed
+## based on this plot the small cells should be <= 50 pixels
+df12 = df12[df12$size<=2000,]
+print(dim(df12))
+ggplot(df12, aes(x=size)) + geom_histogram(binwidth = 10)+
+  scale_x_continuous(breaks = scales::pretty_breaks(n = 20))
+```
+
+```{r}
+# remove small cell dirts
+## based on this plot the small cells should be <= 50 pixels
+df12 = df12[df12$size>=50,]
+print(dim(df12))
+ggplot(df12, aes(x=size)) + geom_histogram(binwidth = 10)+
+  scale_x_continuous(breaks = scales::pretty_breaks(n = 20))
+```
+
+```{r}
+# check based on dsdna expression density
+df12$dsDNA_host_density = df12$dsDNA_host/ df12$size
+ggplot(df12, aes(x=dsDNA_host_density)) + geom_histogram(binwidth = 0.01)+
+  scale_x_continuous(breaks = scales::pretty_breaks(n = 20))
+```
+
+```{r}
+# remove extreme bright cells
+df12 = df12[df12$dsDNA_host_density<=0.7,]
+print(dim(df12))
+ggplot(df12, aes(x=dsDNA_host_density)) + geom_histogram(binwidth = 0.001)+
+  scale_x_continuous(breaks = scales::pretty_breaks(n = 25))
+```
+
+```{r}
+# remove extreme dim cells
+df12 = df12[df12$dsDNA_host_density>=0.01,]
+print(dim(df12))
+ggplot(df12, aes(x=dsDNA_host_density)) + geom_histogram(binwidth = 0.001)+
+  scale_x_continuous(breaks = scales::pretty_breaks(n = 25))
+```
+
+
+```{r}
+# then normalization
+col_use = c("B220", "CD3e", "CD4", "CD11b", "CD11c", "CD31", "CD45", "CD68", "DCAMLK1",
+            "Ecad", "F480", "IgA", "Ki67", "Ly6g", "MUC2", "PNAD.1", "Reg3beta", "SMA", "Tubulin", "Vimentin")
+df12_marker = df12[, col_use]
+df12_marker = log1p(df12_marker) # log1p norm
+```
+
+
+Our clustering strategy:
+sepearte immune and non-immune cells by CD45 expression
+cluster seperately.
+
+
+```{r}
+# look at cd45 signal distribution
+temp = df12_marker
+temp$CD45[temp$CD45>2] = 2
+quantile(temp$CD45,0.9) #1.15
+ggplot(temp, aes(x=CD45)) + geom_histogram(binwidth = 0.01)+
+  scale_x_continuous(breaks = scales::pretty_breaks(n = 25))
+```
+
+```{r}
+# quick check cd45 indicator
+
+run = '2023-03-20T14-32-22-DSST1-Run2' #'2023-03-05T18-22-42-DSST2-Run2' # '2023-03-08T18-48-43-DSST3-Run5'
+fov = 'fov-1-scan-1' #'fov-2-scan-1'#'fov-1-scan-1'
+
+plotsub = df12[(df12$run == run) & (df12$fov == fov),]
+plotsub$CD45_ind = '0'
+plotsub$CD45_ind[plotsub$CD45>=1.15] = '1'
+
+ggplot(plotsub, aes(x = y, y = -x, color = CD45_ind)) + geom_point(size = 2) + theme_classic() + 
+  scale_color_manual(values=as.vector(polychrome(30))) # this looks convincing
+```
+
+
+```{r}
+# gate them into two parts, cluster them seperately
+df12_marker_cd45 = df12_marker[df12_marker$CD45 >= 1.15,]
+df12_marker_other = df12_marker[df12_marker$CD45 < 1.15,]
+
+
+# cluster cd45 first
+col_use = c("B220", "CD3e", "CD4", "CD11b", "CD11c", "CD68", "F480", "IgA", "Ly6g")
+use = df12_marker_cd45[, col_use]
+library(Seurat)
+tm=as.data.frame(t(use))
+
+# seurat clustering
+micromibi_cd45 <- CreateSeuratObject(counts =tm)
+micromibi_cd45 <- SetAssayData(object = micromibi_cd45, slot = "data", new.data = as.matrix(tm)) # no need since already log1p
+micromibi_cd45 <- SetAssayData(object = micromibi_cd45, slot = "scale.data", new.data = as.matrix(tm)) # no scale needed for our custom case
+micromibi_cd45 <- RunPCA(micromibi_cd45, features = rownames(micromibi_cd45))
+
+micromibi_cd45 <- RunUMAP(micromibi_cd45, dims = 1:8)
+micromibi_cd45 <- FindNeighbors(micromibi_cd45, features = rownames(micromibi_cd45), dims = 1:8)
+micromibi_cd45 <- FindClusters(micromibi_cd45, resolution = 0.3)
+DimPlot(micromibi_cd45, label = TRUE) #+ NoLegend()
+```
+
+```{r}
+pltdf_clst = df12_marker_cd45#[,markers_use]
+pltdf_clst[,col_use] = scale(pltdf_clst[,col_use])
+pltdf_clst$Meta = Idents(micromibi_cd45)
+# calculate heatmap from all clusters - by Meta
+pltdf_clst %>%
+  dplyr::group_by(Meta) %>%
+  dplyr::summarise_if(is.numeric, median) %>%
+  ungroup() ->
+  heat_f
+rownames(heat_f) <- heat_f$Meta
+#table(fsom_clustering_data$Meta)
+## manual cap
+cc = colnames(heat_f)[2:21]
+upbd = 1.5
+lwbd = -1.5
+for (c in cc){
+  heat_f[heat_f[,c]>upbd,c] = upbd
+  heat_f[heat_f[,c]<lwbd,c] = lwbd
+}
+
+rownames(heat_f) = as.character(as.integer(rownames(heat_f)) - 1)
+heatmaply(heat_f[,col_use], labRow = rownames(heat_f), main="Meta",
+          scale_fill_gradient_fun = scale_fill_gradient2(low="blue",high="red",midpoint=0,limits=c(lwbd,upbd))
+          )
+```
+
+Immune clusters:
+
+0 DC
+1 Macrophage
+2 Macrophage
+3 Plasma
+4 B
+5 Monocyte
+6 T
+7 Other Immune
+8 B
+9 Neutrophil
+
+Name the clusters
+
+```{r}
+seurat_labels_imm = Idents(micromibi_cd45)
+# manual annotation
+new.cluster.ids <- c("DC","Macrophage","Macrophage","Plasma","B","Monocyte","T",
+                     "Other Immune","B","Neutrophil")
+
+names(new.cluster.ids) <- levels(micromibi_cd45)
+micromibi_cd45 <- RenameIdents(micromibi_cd45, new.cluster.ids)
+table(Idents(micromibi_cd45))
+```
+
+
+```{r}
+DimPlot(micromibi_cd45, label = TRUE) #+ NoLegend()
+```
+
+
+############# cluster out non-immune cells
+
+
+```{r}
+# cluster non-immune cells then
+
+col_use = c("Ecad", "Ki67", "MUC2", "PNAD.1", "SMA", "Tubulin", "Vimentin", "CD31")
+
+use = df12_marker_other[, col_use]
+library(Seurat)
+tm=as.data.frame(t(use))
+
+# seurat clustering
+micromibi_other <- CreateSeuratObject(counts =tm)
+micromibi_other <- SetAssayData(object = micromibi_other, slot = "data", new.data = as.matrix(tm)) # no need since already log1p
+micromibi_other <- SetAssayData(object = micromibi_other, slot = "scale.data", new.data = as.matrix(tm)) # no scale needed for our custom case
+micromibi_other <- RunPCA(micromibi_other, features = rownames(micromibi_other))
+
+micromibi_other <- RunUMAP(micromibi_other, dims = 1:7)
+micromibi_other <- FindNeighbors(micromibi_other, features = rownames(micromibi_other), dims = 1:7)
+micromibi_other <- FindClusters(micromibi_other, resolution = 0.3)
+DimPlot(micromibi_other, label = TRUE) #+ NoLegend()
+```
+
+
+```{r}
+pltdf_clst = df12_marker_other#[,markers_use]
+pltdf_clst[,col_use] = scale(pltdf_clst[,col_use])
+pltdf_clst$Meta = Idents(micromibi_other)
+# calculate heatmap from all clusters - by Meta
+pltdf_clst %>%
+  dplyr::group_by(Meta) %>%
+  dplyr::summarise_if(is.numeric, median) %>%
+  ungroup() ->
+  heat_f
+rownames(heat_f) <- heat_f$Meta
+#table(fsom_clustering_data$Meta)
+## manual cap
+cc = colnames(heat_f)[2:21]
+upbd = 1.5
+lwbd = -1.5
+for (c in cc){
+  heat_f[heat_f[,c]>upbd,c] = upbd
+  heat_f[heat_f[,c]<lwbd,c] = lwbd
+}
+rownames(heat_f) = as.character(as.integer(rownames(heat_f)) - 1)
+heatmaply(heat_f[,col_use], labRow = rownames(heat_f), main="Meta",
+          scale_fill_gradient_fun = scale_fill_gradient2(low="blue",high="red",midpoint=0,limits=c(lwbd,upbd))
+          )
+```
+
+Other clusters:
+
+0 Epithelial
+1 Goblet
+2 Goblet
+3 Smooth muscle (Ki67 high)
+4 Epithelial
+5 Smooth muscle
+6 Epithelial (Muc2+)
+7 Epithelial
+8 Epithelial (Muc2+)
+9 Smooth muscle
+10 Epithelial
+
+Name the clusters
+
+```{r}
+seurat_labels_other = Idents(micromibi_other)
+# manual annotation
+#new.cluster.ids <- c("Goblet","Epithelial","Smooth muscle","Epithelial","Epithelial","Smooth muscle (Ki67 high)","Epithelial",
+#                     "Epithelial","Epithelial","Epithelial")
+
+new.cluster.ids <- c("Epithelial","Goblet","Goblet","Smooth muscle (Ki67 high)","Epithelial","Smooth muscle","Epithelial (Muc2+)",
+                     "Epithelial","Epithelial (Muc2+)","Smooth muscle", "Epithelial")
+
+names(new.cluster.ids) <- levels(micromibi_other)
+micromibi_other <- RenameIdents(micromibi_other, new.cluster.ids)
+table(Idents(micromibi_other))
+```
+
+```{r}
+DimPlot(micromibi_other, label = TRUE) #+ NoLegend()
+```
+
+
+Okay now we can put in the full list and visualize
+
+
+```{r}
+col_use = c("B220", "CD3e", "CD4", "CD11b", "CD11c", "CD31", "CD45", "CD68",
+            "Ecad", "F480", "IgA", "Ki67", "Ly6g", "MUC2", "PNAD.1", "SMA", "Tubulin", "Vimentin")
+df12_marker = df12[, col_use]
+df12_marker = log1p(df12_marker) # log1p norm
+
+library(Seurat)
+tm=as.data.frame(t(df12_marker))
+micromibi <- CreateSeuratObject(counts =tm)
+micromibi <- SetAssayData(object = micromibi, slot = "data", new.data = as.matrix(tm)) # no need since already log1p
+micromibi <- SetAssayData(object = micromibi, slot = "scale.data", new.data = as.matrix(tm)) # no scale needed for our custom case
+micromibi <- RunPCA(micromibi, features = rownames(micromibi))
+micromibi <- RunUMAP(micromibi, dims = 1:15)
+
+micromibi@meta.data$annotationV1 = "None"
+micromibi@meta.data$annotationV1[df12_marker$CD45 >= 1.15] = as.character(Idents(micromibi_cd45))
+micromibi@meta.data$annotationV1[df12_marker$CD45 < 1.15] = as.character(Idents(micromibi_other))
+micromibi@meta.data$annotationV1 <- factor(micromibi@meta.data$annotationV1,
+                                           levels = c("Epithelial", "Epithelial (Muc2+)" ,"Goblet", "Smooth muscle", "Smooth muscle (Ki67 high)",
+                                                      "B", 'Plasma',"T", "Monocyte", "Macrophage", 'DC', 'Other Immune',
+                                                      'Neutrophil'))
+
+DimPlot(micromibi, group.by = 'annotationV1', raster = F) + #
+  scale_color_manual(values = c("#8DD3C7","#BEBADA", "#FB8072", "#A6CEE3",
+                                "#1F78B4", "#B2DF8A", "#33A02C",
+                                "#FB9A99", "#E31A1C", "#FDBF6F",
+                                "#FF7F00", "#1B9E77", "#D95F02"))#scale_color_npg() #+ NoLegend() 
+```
+
+
+```{r}
+#save out the final version
+svdf = df12
+
+# we only use the normalized values
+col_use = c("B220", "CD3e", "CD4", "CD11b", "CD11c", "CD31", "CD45", "CD68", "DCAMLK1",
+            "Ecad", "F480", "IgA", "Ki67", "Ly6g", "MUC2", "PNAD.1", "Reg3beta", "SMA", "Tubulin", "Vimentin")
+df12_marker = df12[, col_use]
+df12_marker = log1p(df12_marker) # log1p norm
+
+svdf[,col_use] = df12_marker
+svdf$annV1 = micromibi@meta.data$annotationV1
+head(svdf)
+write.csv(svdf, '../data/mibi_cell_resultann_0411.csv', quote = FALSE)
+```
+
+Now we can do cell type barplot
+
+```{r}
+full_meta = read.csv('../data/meta_mibi_dsp.csv', na.strings=c("","NA"))
+colnames(full_meta)[2] = "run"
+colnames(full_meta)[3] = "fov"
+
+plot_mibi_celltype = svdf
+plot_mibi_celltype = left_join(plot_mibi_celltype, full_meta, by = c('fov', 'run'))
+plot_mibi_celltype$X.x <- NULL
+plot_mibi_celltype$X.y <- NULL
+
+# add more meta info
+plot_mibi_celltype$tissue = str_sub(plot_mibi_celltype$run, -7,-6)
+plot_mibi_celltype$treatment = str_sub(plot_mibi_celltype$tissue, -3,-2)
+
+# also need to remove the lymph node fov
+plot_mibi_celltype = plot_mibi_celltype[(plot_mibi_celltype$run != '2023-03-08T18-48-43-DSST3-Run5') & # remove a specific fov that is discarded
+                                          (plot_mibi_celltype$fov != 'fov-1-scan-1'),]
+```
+
+
+```{r}
+celltype_df <- plot_mibi_celltype %>% group_by(location,treatment, annV1) %>%
+  summarise(n = n()) %>%
+  mutate(freq = n / sum(n))
+
+celltype_df$annV1 <- factor(celltype_df$annV1,
+                                           levels = c("Epithelial", "Epithelial (Muc2+)" ,"Goblet", "Smooth muscle", "Smooth muscle (Ki67 high)",
+                                                      "B", 'Plasma',"T", "Monocyte", "Macrophage", 'DC', 'Other Immune',
+                                                      'Neutrophil'))
+celltype_df = celltype_df[!is.na(celltype_df$annV1),]
+
+pbar = ggplot(data=celltype_df, aes(x=interaction(treatment, location), y=freq, fill=annV1)) +
+  geom_bar(stat="identity") + theme_classic() +
+  scale_fill_manual(values = c("#8DD3C7","#BEBADA", "#FB8072", "#A6CEE3",
+                                "#1F78B4", "#B2DF8A", "#33A02C",
+                                "#FB9A99", "#E31A1C", "#FDBF6F",
+                                "#FF7F00", "#1B9E77", "#D95F02"))
+
+ggsave('../plots/fullBar_mibi_cell.svg', height = 3.5, width = 5) # per col 0.5, height 3.5 
+ggsave('../plots/fullBar_mibi_cell.png', height = 3.5, width = 5) # per col 0.5, height 3.5 
+pbar
+```
+
+Then we can calcualte the cell type log fold changes
+
+```{r}
+celltype_df_perFOV <- plot_mibi_celltype %>% group_by(run,fov,treatment,location,annV1) %>%
+  summarise(n = n()) %>%
+  mutate(freq = n / sum(n))
+```
+
+
+```{r}
+# sep
+celltype_df_perFOV_ctrl_small = subset(celltype_df_perFOV, (celltype_df_perFOV$treatment == 'C') &
+                                         (celltype_df_perFOV$location == 'Small'))
+
+celltype_df_perFOV_ctrl_large = subset(celltype_df_perFOV, (celltype_df_perFOV$treatment == 'C') &
+                                         (celltype_df_perFOV$location == 'Large'))
+
+celltype_df_perFOV_dss_small = subset(celltype_df_perFOV, (celltype_df_perFOV$treatment == 'T') &
+                                         (celltype_df_perFOV$location == 'Small'))
+
+celltype_df_perFOV_dss_large = subset(celltype_df_perFOV, (celltype_df_perFOV$treatment == 'T') &
+                                         (celltype_df_perFOV$location == 'Large'))
+
+# calculate per fov average of celltype composition for ctrl sample
+ctrl_small_avg = celltype_df_perFOV_ctrl_small %>% group_by(annV1) %>% summarize(avg = mean(freq))
+ctrl_large_avg = celltype_df_perFOV_ctrl_large %>% group_by(annV1) %>% summarize(avg = mean(freq))
+dss_small_avg = celltype_df_perFOV_dss_small %>% group_by(annV1) %>% summarize(avg = mean(freq))
+dss_large_avg = celltype_df_perFOV_dss_large %>% group_by(annV1) %>% summarize(avg = mean(freq))
+
+# calculate log2 change
+fc_small = dss_small_avg$avg / ctrl_small_avg$avg
+fc_small = fc_small + 0.00001
+fc_small = log2(fc_small)
+
+fc_large = dss_large_avg$avg / ctrl_large_avg$avg
+fc_large = fc_large + 0.00001
+fc_large = log2(fc_large)
+
+plotfc2 = data.frame(celltype = ctrl_large_avg$annV1, fc2_small = fc_small, fc2_large = fc_large)
+plotfc2$celltype <- factor(plotfc2$celltype,
+                        levels = c("Epithelial", "Epithelial (Muc2+)" ,"Goblet", "Smooth muscle", "Smooth muscle (Ki67 high)",
+                                                      "B", 'Plasma',"T", "Monocyte", "Macrophage", 'DC', 'Other Immune',
+                                                      'Neutrophil'))
+
+#ggplot(plotfc2, aes(x=reorder(celltype, fc2_small), y=fc2_small, fill = celltype)) +
+#  geom_bar(stat='identity') + theme_classic() + ggtitle("small intestine change") +
+#  scale_fill_manual(values = c("#8DD3C7","#BEBADA", "#FB8072", "#A6CEE3",
+#                                "#1F78B4", "#B2DF8A", "#33A02C",
+#                                "#FB9A99", "#E31A1C", "#FDBF6F",
+#                                "#FF7F00", "#1B9E77", "#D95F02")) #+ggtitle(celltype)
+```
+
+
+############ do testing and only plot out p values first
+
+
+```{r}
+# make new container dataframe
+celltypes = unique(celltype_df_perFOV_ctrl_small$annV1)
+result_ctner = data.frame(celltype = celltypes, pvalue_small = 1, pvalue_large = 1)
+rownames(result_ctner) = result_ctner$celltype
+
+location = 'Large'
+
+ctrl_data = rbind(celltype_df_perFOV_ctrl_small, celltype_df_perFOV_ctrl_large)
+dss_data = rbind(celltype_df_perFOV_dss_small, celltype_df_perFOV_dss_large)
+
+for (celltype in celltypes){
+  x = ctrl_data[(ctrl_data$location == location) & (ctrl_data$annV1 == celltype),"freq"]
+  y = dss_data[(dss_data$location == location) & (dss_data$annV1 == celltype),"freq"]
+  padj = t.test(y,x, paired=FALSE)$p.value #* 22 # vanilla adjusted
+  result_ctner[celltype, 'pvalue_large'] = padj
+}
+
+
+location = 'Small'
+celltypes = unique(celltype_df_perFOV_ctrl_small$annV1)
+
+ctrl_data = rbind(celltype_df_perFOV_ctrl_small, celltype_df_perFOV_ctrl_large)
+dss_data = rbind(celltype_df_perFOV_dss_small, celltype_df_perFOV_dss_large)
+
+for (celltype in celltypes){
+  x = ctrl_data[(ctrl_data$location == location) & (ctrl_data$annV1 == celltype),"freq"]
+  y = dss_data[(dss_data$location == location) & (dss_data$annV1 == celltype),"freq"]
+  padj = t.test(y,x, paired=FALSE)$p.value #* 22 # vanilla adjusted
+  result_ctner[celltype, 'pvalue_small'] = padj
+}
+```
+
+
+Make fold change plot with small p values
+
+```{r}
+sigctyp = result_ctner[result_ctner$pvalue_small <= 0.1, 'celltype']
+temp = plotfc2[plotfc2$celltype %in% sigctyp,]
+
+p1 = ggplot(temp, aes(x=reorder(celltype, fc2_small), y=fc2_small, fill = celltype)) +
+  geom_bar(stat='identity', colour="black", linewidth = 0.2, width = 0.8) + theme_classic() + ggtitle("small intestine change") +
+  ylim(c(-1, 1)) + theme(legend.position="none") + 
+  scale_fill_manual(values = c("Epithelial" = "#8DD3C7",
+                                "Goblet" = "#FB8072",
+                                "Other Immune" = "#1B9E77",
+                                "Smooth muscle (Ki67 high)" = "#1F78B4",
+                                "Macrophage" = "#FDBF6F",
+                                "Plasma" = "#33A02C",
+                                "B" = "#B2DF8A")) 
+ggsave('../plots/small_change_mibi_sig.svg', height = 3.5, width = 4.2) # per col 0.5, height 3.5 
+ggsave('../plots/small_change_mibi_sig.png', height = 3.5, width = 4.2) # per col 0.5, height 3.5 
+p1
+```
+
+```{r}
+sigctyp = result_ctner[result_ctner$pvalue_large <= 0.1, 'celltype']
+temp = plotfc2[plotfc2$celltype %in% sigctyp,]
+
+p2 = ggplot(temp, aes(x=reorder(celltype, fc2_large), y=fc2_large, fill = celltype)) +
+  geom_bar(stat='identity', colour="black", linewidth = 0.2, width = 0.8) + theme_classic() + ggtitle("large intestine change") +
+  ylim(c(-1.5, 2.5)) + theme(legend.position="none") + 
+  scale_fill_manual(values = c( "Macrophage" = "#FDBF6F",
+                                "Plasma" = "#33A02C",
+                                "DC" = "#FF7F00",
+                                "Monocyte" = "#E31A1C",
+                                "T" = "#FB9A99"))
+
+ggsave('../plots/large_change_mibi_sig.svg', height = 3.5, width = 3) # per col 0.5, height 3.5 
+ggsave('../plots/large_change_mibi_sig.png', height = 3.5, width = 3) # per col 0.5, height 3.5 
+p2
+```
+
+generate umap plot
+
+```{r}
+umap_all = as.data.frame(micromibi@reductions$umap@cell.embeddings)
+umap_all$ann = micromibi@meta.data$annotationV1
+umap_all$ann <- factor(umap_all$ann,
+                        levels = c("Epithelial", "Epithelial (Muc2+)" ,"Goblet", "Smooth muscle", "Smooth muscle (Ki67 high)",
+                                                      "B", 'Plasma',"T", "Monocyte", "Macrophage", 'DC', 'Other Immune',
+                                                      'Neutrophil'))
+
+p = ggplot(umap_all, aes(x = UMAP_1, y = UMAP_2, color = ann)) + geom_point(size = 0.2, stroke = 0.2) +
+  theme_classic() + 
+  scale_color_manual(values = c("#8DD3C7","#BEBADA", "#FB8072", "#A6CEE3",
+                                "#1F78B4", "#B2DF8A", "#33A02C",
+                                "#FB9A99", "#E31A1C", "#FDBF6F",
+                                "#FF7F00", "#1B9E77", "#D95F02")) 
+
+ggsave('../plots/all_cell_umapV2.png', height = 6, width = 8)
+p
+
+```
+

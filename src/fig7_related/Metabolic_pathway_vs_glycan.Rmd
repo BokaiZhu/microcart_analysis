@@ -1,0 +1,208 @@
+---
+title: "glycan_metabV2"
+output: html_document
+---
+
+## script used to calcualte and plot significant correlation between metabolic process related gene pathway scores to glycan expression, presented in figure 7.
+
+First read DSP related information.
+
+```{r}
+## read in the data first, this case we do not care about bacteria related rois, already removed
+
+dsp_counts = read.csv('../../dsp_related/final_data/microdsp_q3Counts.csv')
+sampname = dsp_counts$X
+## read in meta data for dsp
+meta = read.table("../../dsp_related/final_data/meta_analys_use.txt", sep = '\t', header = T, na.strings=c("","NA"))
+## need to remove some samples since no coutns somehow
+meta = meta[meta$Sample_ID %in% sampname,]
+sampnametarget = meta$Sample_ID[meta$slide.name != '0117-BCR' &
+                                  meta$segment != 'Full ROI' &
+                                  meta$slide.name != 'No Template Control']# sample names for wta analysis
+meta_host = meta[meta$slide.name != '0117-BCR' &
+                                  meta$segment != 'Full ROI' &
+                                  meta$slide.name != 'No Template Control',]# sample names for wta analysis
+meta_host$treatment = substr(meta_host$tag2, 0, 1)
+dsp_counts = dsp_counts[match(sampnametarget, sampname), ]
+dsp_counts$X = NULL
+
+# count
+dsp_counts_cd45 = dsp_counts[meta_host$segment == 'CD45',]
+dsp_counts_ecad = dsp_counts[meta_host$segment == 'Ecad',]
+## meta
+dsp_meta_cd45 = meta_host[meta_host$segment == 'CD45',]
+dsp_meta_ecad = meta_host[meta_host$segment == 'Ecad',]
+
+```
+
+and maldi related information etc.
+
+```{r}
+library(dplyr)
+library(tidyverse)
+library(tidyr)
+## make sure donut sequence all the same for all modalities
+meta_all = read.csv('../../../meta_link/meta_mibi_dsp.csv')
+meta_all$X.1 = NULL
+#maldi_fov = read.csv('../data/fov_maldi_extracted.csv')
+#meta_3 = left_join(meta_all, maldi_fov, by = c("X" = "id"))
+meta_all3 = subset(meta_all, meta_all$DSP_Bac_name != '' & meta_all$DSP_Ecad_name != '' &
+         meta_all$DSP_CD45_name != '')
+meta_all3$id = meta_all3$X
+#head(meta_all3) #78
+# link meta info
+temp = meta_all3
+colnames(temp) = c('X', 'run', 'fov', 'location', 'DSP_Ecad_name', 'DSP_CD45_name', 'DSP_Bac_name',
+                   'tissueID', 'MALDI.ID', 'id')
+
+### link
+temp2 = temp[,c('DSP_Ecad_name', 'DSP_CD45_name', 'id')]
+temp2 = temp2[temp2$DSP_Ecad_name != '' &
+        temp2$DSP_CD45_name != '',]
+a = temp2[,c(1,3)]
+a$type = 'Ecad'
+b = temp2[,c(2,3)]
+b$type = 'CD45'
+colnames(a) = c('Sample_ID', 'id', 'type')
+colnames(b) = c('Sample_ID', 'id', 'type')
+temp3 = rbind(a,b)
+temp3 = subset(temp3, temp3$type == 'Ecad')
+
+### matched
+mid = match(temp3$Sample_ID, dsp_meta_ecad$Sample_ID)
+mid = mid[!is.na(mid)]
+dsp_counts_ecad_m = dsp_counts_ecad[mid,]
+dsp_meta_ecad_m = dsp_meta_ecad[mid,]
+
+# glycan expression
+gexp = read.csv('../../multiomics/data/fov_maldi_extracted.csv')
+
+oid = temp3$id[match(dsp_meta_ecad_m$Sample_ID, temp3$Sample_ID)]
+gid = match(oid, gexp$id)
+gexp2 = gexp[gid,]
+##
+glyc = colnames(gexp2)
+gexp2 = as.data.frame((gexp2))
+gexp2 <-  as.data.frame(sapply( gexp2, as.numeric))
+```
+
+Then extract all 'METABOLIC_PROCESS' related gene pathways from GO:BP gmt file. Then calculate gene pathway scores using gsva.
+
+```{r}
+library(GSA)
+# 
+gmt_file <-GSA.read.gmt('../data/m5.go.bp.v2023.1.Mm.symbols.gmt')
+
+all_metab_id = grepl("METABOLIC_PROCESS",gmt_file$geneset.names)
+all_metab_genelist = gmt_file$genesets[all_metab_id]
+all_metab_pathname = gmt_file$geneset.names[all_metab_id] # 453 metabolic related pathways
+
+container = dsp_meta_ecad_m[,c(1,12)]
+
+library(GSVA)
+#for (i in c(1:length(targetpath))){
+n = length(all_metab_pathname)
+
+for (i in 1:n) {
+  tryCatch({
+    target = all_metab_pathname[i]
+    targetg = unlist(all_metab_genelist[i])
+  
+    targetScore=gsva(t(dsp_counts_ecad_m),list(targetg),method="ssgsea",ssgsea.norm=TRUE,verbose=T)
+    container[target] = t(targetScore)
+  }, error=function(e){cat("ERROR :",conditionMessage(e), "\n")})
+}
+
+library(matrixStats)
+var_values = colVars(as.matrix(container[,c(3:452)])) # also calculate the variance of the scores
+
+library(ggplot2)
+ 
+data=data.frame(value=var_values)
+p <- ggplot(data, aes(x=value)) + 
+  geom_histogram(binwidth=0.0005)
+p
+```
+
+
+```{r}
+# only investigating the top 20 variable metabolic processes
+top_meta_pathnames = all_metab_pathname[order(var_values, decreasing = T)[c(1:20)]]
+top_meta_genes = all_metab_genelist[order(var_values, decreasing = T)[c(1:20)]]
+#top_meta_pathnames[c(1:10)]
+```
+
+Start calcualting the correlations between metabolic process scores and glycan expression.
+
+```{r}
+totest = container[,top_meta_pathnames]
+cor_met = cbind(totest, gexp2)
+
+library(RcmdrMisc)
+corrM_cro = rcorr.adjust(cor_met,type="spearman")
+corrMa_cro = corrM_cro$R$r
+corrP_cro = as.data.frame(corrM_cro$P)
+corrP_cro[corrP_cro == '<.0001'] = 0 # for convinient
+corrP_cro <- mutate_all(corrP_cro, function(x) as.numeric(as.character(x)))
+
+## 
+corrP_cro = corrP_cro[c(21:58),c(1:20)] # right matrix 
+
+## select only sig containing pathways and glycans
+glycan_list = list()
+n = dim(corrP_cro)[1]
+for (i in c(1:n)){
+  tf = all(corrP_cro[i,]>0.05)
+  glycan_list = c(glycan_list, tf)
+}
+glycan_list = unlist(glycan_list)
+glycan_list = !glycan_list
+target_glycans = rownames(corrP_cro)[glycan_list]
+
+## select sig pathways
+path_list = list()
+n = dim(corrP_cro)[2]
+for (i in c(1:n)){
+  tf = all(corrP_cro[,i]>0.05)
+  path_list = c(path_list, tf)
+}
+path_list = unlist(path_list)
+path_list = !path_list
+target_path = colnames(corrP_cro)[path_list]
+
+## also retrieve the correlation strengths too
+corrMa_cro = as.data.frame(corrMa_cro)
+corrMa_cro = corrMa_cro[c(21:58),c(1:20)]
+
+# p values
+plot_gly_path_p = corrP_cro[target_glycans,target_path]
+plot_gly_path_p[plot_gly_path_p == 0] = 0.001
+plot_gly_path_p = -log10(plot_gly_path_p)
+# corr
+plot_gly_path_r = corrMa_cro[target_glycans,target_path]
+
+## melt??
+df_plot = melt(plot_gly_path_p)
+colnames(df_plot) = c('path', 'log10p')
+df_plot$r = melt(plot_gly_path_r)$value
+df_plot$glycan = rep(rownames(plot_gly_path_p),10)
+#head(df_plot)
+
+df_plot$path2 = gsub('GOBP_', '',df_plot$path)
+df_plot$path2 = gsub('_METABOLIC_PROCESS', '',df_plot$path2)
+### plotting
+dot_plot <- ggplot(df_plot, aes(x=glycan, y=path2)) +
+  geom_point(aes(size = log10p, fill = r), color="black", shape=21) +
+  scale_size("% detected", range = c(0,6)) +
+  scale_fill_gradientn(colours = c("blue", "white", "red")) +
+  ylab("") + xlab("") +
+  theme_classic() +
+  theme(axis.text.x = element_text(size=10,angle = 90, hjust=1, color="black"),
+        axis.text.y = element_text(size=10,color="black"),
+        axis.title = element_text(size=14),
+        legend.position = c(1, 0.3))
+ggsave('../plots/glycan_pathway_dot_all_test.svg', height = 4, width = 8)
+dot_plot
+```
+
+

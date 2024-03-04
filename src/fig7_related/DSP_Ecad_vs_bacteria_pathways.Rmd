@@ -1,0 +1,153 @@
+---
+title: "dsp_bac_host_cor"
+output: html_document
+---
+
+This script calcualtes the correlation between genes from Ecad ROIs and bacteria signals from fecal ROIs. Note the correlations are calculated between paired (adjacent) Ecad-fecal ROIs.
+
+
+```{r}
+############### read in dsp data host
+
+dsp_counts = read.csv('../../dsp_related/final_data/microdsp_q3Counts.csv') # host DSP Q3 norm counts
+
+################ bacteria version
+## read in dsp data
+bac_counts = read.csv('../../dsp_related/final_data/microdsp_q3V2Counts.csv') # same but bacteria counts
+###
+meta = read.table("../../dsp_related/final_data/meta_analys_use.txt", sep = '\t', header = T, na.strings=c("","NA"))
+meta_host = meta[meta$slide.name != '0117-BCR' & # remove ROIs from BMA validation
+                                  #meta$segment != 'Full ROI' &
+                                  meta$slide.name != 'No Template Control',]# sample names for wta analysis
+meta_host$treatment = substr(meta_host$tag2, 0, 1)
+
+library(stringr)
+full_meta = read.csv('../../../meta_link/meta_mibi_dsp.csv', na.strings=c("","NA"))
+colnames(full_meta)[2] = "run"
+colnames(full_meta)[3] = "fov"
+
+full_meta_bacteria = full_meta[!is.na(full_meta$DSP_Bac_name),]
+indexget = full_meta_bacteria$DSP_Bac_name %in% dsp_counts$X & full_meta_bacteria$DSP_Ecad_name %in% dsp_counts$X
+full_meta_bacteriaf = full_meta_bacteria[indexget,]
+# quick check if regions in data
+full_meta_bacteriaf$treatment = substr(full_meta_bacteriaf$run, 24, 24)
+
+
+#### change row names for dsp host and bacteria coutns
+
+rownames(dsp_counts) = dsp_counts$X
+dsp_counts$X = NULL
+rownames(bac_counts) = bac_counts$X
+bac_counts$X = NULL
+```
+
+
+######## First thing to test:
+
+dss: large: bac vs Ecad
+ctrl: large: bac vs Ecad
+
+```{r}
+# dss: large: bac vs Ecad
+full_meta_bacteriaf_dss = subset(full_meta_bacteriaf, full_meta_bacteriaf$treatment == 'T' &
+                                   full_meta_bacteriaf$location == 'Large')
+x_n = meta_host$Sample_ID[match(full_meta_bacteriaf_dss$DSP_Bac_name, meta_host$Sample_ID)] # bac
+y_n = meta_host$Sample_ID[match(full_meta_bacteriaf_dss$DSP_Ecad_name, meta_host$Sample_ID)] # ecad
+
+x = bac_counts[x_n,]
+y = dsp_counts[y_n,c(1:8887)]
+
+### corr
+library(CCA)
+xy = matcor(x,y)
+corr_xy = xy$XYcor[c(1:4),c(5:8891)] # corr between bacteria 
+
+```
+
+
+##### first get host genes that are highly correlated with adjacnet bacteria signals (Top 50)
+
+```{r}
+### plotting all genes seems too ambitious, lets get head and tails
+temp = list()
+for (item in rownames(corr_xy)){
+  temp = append(temp, colnames(corr_xy)[order(corr_xy[item,], decreasing = T)[c(1:50)]])
+  #temp = append(temp, colnames(corr_xy)[order(corr_xy[item,], decreasing = F)[c(1:20)]])
+}
+
+plt_genes = unique(unlist(temp))
+plt_genes
+
+```
+
+
+
+```{r}
+library(viridis)
+#svg(file="../plots/bac_host_corr_dsp_ht50_nolowCorr_colortest.svg",height = 4, width = 20)
+#pheatmap(corr_xy[c('Firm', 'Bac', 'Pro'),plt_genes], color = inferno(50))
+#dev.off()
+
+##
+pdf(file="../plots/bac_host_corr_dsp_ht50_nolowCorr_colortest2.pdf",height = 3, width = 20)
+pheatmap(corr_xy[c('Firm', 'Bac', 'Pro'),plt_genes], color = viridis(50),
+         treeheight_row = 0, treeheight_col = 0)
+dev.off()
+
+##
+#tiff(file="../plots/bac_host_corr_dsp_ht50_nolowCorr_colortest.tiff",height = 4, width = 20)
+#pheatmap(corr_xy[c('Firm', 'Bac', 'Pro'),plt_genes], color = inferno(50))
+#dev.off()
+```
+
+
+
+##### then we can perform gene ontology analysis based on the highly correlated genes
+
+```{r}
+library(enrichR)
+setEnrichrSite("Enrichr") #human or mouse db
+dbs <- c("GO_Biological_Process_2015") # consistent with previous analysis
+```
+
+## we found top correlated genes are all metabolic processes:
+
+```{r}
+##
+algg = colnames(corr_xy)[order(corr_xy['Firm',], decreasing = T)[c(1:50)]]
+enriched <- enrichr(algg, dbs)
+temp = enriched$GO_Biological_Process_2015
+print(temp$Term[c(1:10)])
+
+## important genes
+#phosphatidylethanolamine biosynthetic process (GO:0006646) - SLC27A1;PHOSPHO1
+#fatty acid metabolic process (GO:0006631) - SLC27A1;EHHADH;MGLL;ACSF2;SLC27A4
+```
+
+```{r}
+##
+algg = colnames(corr_xy)[order(corr_xy['Bac',], decreasing = T)[c(1:50)]]
+enriched <- enrichr(algg, dbs)
+temp = enriched$GO_Biological_Process_2015
+print(temp$Term[c(1:10)])
+
+## important genes
+#	membrane lipid metabolic process (GO:0006643) - GAL3ST1;A4GALT;SMPDL3A;ST6GALNAC4;SERINC5
+#lipid biosynthetic process (GO:0008610) - FADS2;GAL3ST1;ACSS2;ELOVL7;A4GALT;SERINC5
+```
+
+```{r}
+##
+algg = colnames(corr_xy)[order(corr_xy['Pro',], decreasing = T)[c(1:50)]]
+enriched <- enrichr(algg, dbs)
+temp = enriched$GO_Biological_Process_2015
+print(temp$Term[c(1:10)])
+
+## genes that are important:
+#phosphatidic acid biosynthetic process (GO:0006654) - PLA2G2A;PLA2G10;AGPAT1
+#cholesterol metabolic process (GO:0008203) - CELA3B;EBP;GGPS1;CEL
+#intestinal cholesterol absorption (GO:0030299) - CEL;PNLIP
+```
+
+
+

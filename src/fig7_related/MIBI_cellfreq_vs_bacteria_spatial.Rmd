@@ -1,0 +1,223 @@
+---
+title: "mibi_bac_corr_host"
+output: html_document
+---
+
+
+This script calcualtes the correlation between cell type frequencies and bacteria spatial metrics, based on MIBI imaging data.
+
+
+########### correlation between cell freq and localized mucus-bacteria ratio:
+
+
+```{r}
+# read ratio information
+# read cell type frequency
+# read meta data
+
+bacratio = read.csv('../../MIBI_analysis/final_data/bac_csv/nbhd_ratioV1.csv')
+mibidf = read.csv('../../MIBI_analysis/final_data/host_csv/mibi_cell_resultann_0411.csv')
+##
+full_meta = read.csv('../../../meta_link/meta_mibi_dsp.csv', na.strings=c("","NA"))
+colnames(full_meta)[2] = "run"
+colnames(full_meta)[3] = "fov"
+
+## clean bacratio
+bacratio$fov_tma = paste0(bacratio$fov, '_' ,bacratio$run)
+bacratioc = bacratio[,c('fov_tma', 'rmll')]
+
+## get fov level cell frequency
+perc_ann = mibidf %>% group_by(fov, run, annV1) %>% 
+  summarise(n = n()) %>%
+  mutate(freq = n / sum(n))
+
+## add tissue info
+perc_ann = left_join(perc_ann, full_meta, by = c('fov', 'run'))
+perc_ann$X.x <- NULL
+perc_ann$X.y <- NULL
+perc_ann$tissue = str_sub(perc_ann$run, -7,-6)
+perc_ann$treatment = str_sub(perc_ann$tissue, -3,-2)
+
+##
+perc_ann$fov_tma = paste0(perc_ann$fov, '_' ,perc_ann$run)
+perc_ann_sub = perc_ann[,c('fov_tma', 'annV1', 'freq')]
+##
+meta_df = perc_ann[,c('location', 'fov_tma', 'treatment')]
+meta_df = meta_df[!duplicated(meta_df), ]
+
+library(reshape2)
+mibifreq = dcast(perc_ann_sub, fov_tma ~ annV1)
+mibifreq[is.na(mibifreq)] <- 0
+
+## merge
+
+df_full = left_join(bacratioc, mibifreq)
+df_full$treatment = meta_df$treatment[match(df_full$fov_tma, meta_df$fov_tma)]
+df_full$location = meta_df$location[match(df_full$fov_tma, meta_df$fov_tma)]
+
+```
+
+
+```{r}
+library(ggpubr)
+
+celltype = c('B', 'DC', 'Epithelial', 'Epithelial (Muc2+)', 
+             'Goblet', 'Macrophage', 'Monocyte', 'Neutrophil',
+             'Other Immune', 'Plasma', 'Smooth muscle', 
+             'Smooth muscle (Ki67 high)', 'T')
+n = length(celltype)
+
+## large or small
+df_meta_sub = subset(df_full, df_full$location == 'Large')
+
+for (i in c(1:n)){
+  
+    right = celltype[i]
+    left = 'rmll'
+    temp = data.frame(x = log10(df_meta_sub[,left]), y = df_meta_sub[,right],
+                      treatment = df_meta_sub$treatment)
+    p <- ggplot(temp, aes(x, y)) + 
+    geom_point() + facet_grid(. ~ treatment) + stat_smooth(method = "lm") +
+      xlab(left) + ylab(right) +  stat_cor()
+    p
+    assign(paste0("p",i), p)
+    #print(i)
+}
+
+library(patchwork)
+pp1 = wrap_plots(p1,p2,p3,p4,p5,p6,p7,p8,p9,p10,p12,p13,ncol = 3)
+pp1
+```
+
+##### plot the most significantly correlated pairs:
+
+```{r}
+df_meta_sub = subset(df_full, df_full$location == 'Large' )
+
+p <- ggplot(df_meta_sub, aes(log10(rmll), `Epithelial (Muc2+)`)) + 
+    geom_point() + facet_grid(. ~ treatment) + stat_smooth(method = "lm") +
+    xlab('Median ratio') + ylab('Epi-2') +  stat_cor() + theme_classic()
+ggsave('../plots/epi-2_ratio.svg', height = 2.5, width = 7.5)
+p
+
+```
+```{r}
+df_meta_sub = subset(df_full, df_full$location == 'Large' )
+
+p <- ggplot(df_meta_sub, aes(log10(rmll), `Goblet`)) + 
+    geom_point() + facet_grid(. ~ treatment) + stat_smooth(method = "lm") +
+    xlab('Median ratio') + ylab('Goblet') +  stat_cor() + theme_classic()
+ggsave('../plots/goblet_ratio.svg', height = 2.5, width = 7.5)
+p
+
+```
+
+
+
+
+################### same analysis but based on bacteria entropy:
+
+
+```{r}
+# read ratio information
+# read cell type frequency
+# read meta data
+
+entro = read.csv('../../MIBI_analysis/final_data/bac_csv/nbhd_entroV1.csv')
+mibidf = read.csv('../../MIBI_analysis/final_data/host_csv/mibi_cell_resultann_0411.csv')
+##
+full_meta = read.csv('../../../meta_link/meta_mibi_dsp.csv', na.strings=c("","NA"))
+colnames(full_meta)[2] = "run"
+colnames(full_meta)[3] = "fov"
+
+## clean bacratio
+entro$fov_tma = paste0(entro$fov, '_' ,entro$run)
+entroc = entro[,c('fov_tma', 'entro')]
+
+## get fov level cell frequency
+perc_ann = mibidf %>% group_by(fov, run, annV1) %>% 
+  summarise(n = n()) %>%
+  mutate(freq = n / sum(n))
+
+## add tissue info
+perc_ann = left_join(perc_ann, full_meta, by = c('fov', 'run'))
+perc_ann$X.x <- NULL
+perc_ann$X.y <- NULL
+perc_ann$tissue = str_sub(perc_ann$run, -7,-6)
+perc_ann$treatment = str_sub(perc_ann$tissue, -3,-2)
+##
+perc_ann$fov_tma = paste0(perc_ann$fov, '_' ,perc_ann$run)
+perc_ann_sub = perc_ann[,c('fov_tma', 'annV1', 'freq')]
+meta_df = perc_ann[,c('location', 'fov_tma', 'treatment')]
+meta_df = meta_df[!duplicated(meta_df), ]
+##
+
+library(reshape2)
+mibifreq = dcast(perc_ann_sub, fov_tma ~ annV1)
+mibifreq[is.na(mibifreq)] <- 0
+
+## merge
+
+df_full = left_join(entroc, mibifreq)
+df_full$treatment = meta_df$treatment[match(df_full$fov_tma, meta_df$fov_tma)]
+df_full$location = meta_df$location[match(df_full$fov_tma, meta_df$fov_tma)]
+
+```
+
+
+```{r}
+library(ggpubr)
+
+celltype = c('B', 'DC', 'Epithelial', 'Epithelial (Muc2+)', 
+             'Goblet', 'Macrophage', 'Monocyte', 'Neutrophil',
+             'Other Immune', 'Plasma', 'Smooth muscle', 
+             'Smooth muscle (Ki67 high)', 'T')
+n = length(celltype)
+
+## large or small
+df_meta_sub = subset(df_full, df_full$location == 'Large')
+
+for (i in c(1:n)){
+  
+    right = celltype[i]
+    left = 'entro'
+    temp = data.frame(x = (df_meta_sub[,left]), y = df_meta_sub[,right],
+                      treatment = df_meta_sub$treatment)
+    p <- ggplot(temp, aes(x, y)) + 
+    geom_point() + facet_grid(. ~ treatment) + stat_smooth(method = "lm") +
+      xlab(left) + ylab(right) +  stat_cor()
+    p
+    assign(paste0("p",i), p)
+    #print(i)
+}
+
+library(patchwork)
+pp1 = wrap_plots(p1,p2,p3,p4,p5,p6,p7,p8,p9,p10,p12,p13,ncol = 3)
+pp1
+```
+
+
+```{r}
+df_meta_sub = subset(df_full, df_full$location == 'Large' )
+
+p <- ggplot(df_meta_sub, aes((entro), `Monocyte`)) + 
+    geom_point() + facet_grid(. ~ treatment) + stat_smooth(method = "lm") +
+    xlab('Median entropy') + ylab('Monocyte') +  stat_cor() + theme_classic()
+ggsave('../plots/Mono_entro.svg', height = 2.5, width = 7.5)
+p
+
+```
+
+
+```{r}
+df_meta_sub = subset(df_full, df_full$location == 'Large' )
+
+p <- ggplot(df_meta_sub, aes((entro), `T`)) + 
+    geom_point() + facet_grid(. ~ treatment) + stat_smooth(method = "lm") +
+    xlab('Median entropy') + ylab('T') +  stat_cor() + theme_classic()
+ggsave('../plots/T_entro.svg', height = 2.5, width = 7.5)
+p
+
+```
+
+

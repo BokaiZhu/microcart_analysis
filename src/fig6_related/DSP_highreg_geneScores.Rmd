@@ -1,0 +1,187 @@
+---
+title: "macmono_score"
+output: html_document
+---
+
+This script we calcualted gene scores from DSP data, focusing one smoothing muscle, macrophage and monocyte related pathways from GO:BP database.
+
+```{r}
+# read in annotation from mib
+library(dplyr)
+mibidf = read.csv('../../MIBI_analysis/final_data/host_csv/mibi_cell_resultann_0411.csv')
+
+# mph and monocyte into myeloid
+mibidf[mibidf == "Macrophage"] <- "Myeloid"
+mibidf[mibidf == "Monocyte"] <- "Myeloid"
+
+##
+perc_ann = mibidf %>% group_by(fov, run, annV1) %>% 
+  summarise(n = n()) %>%
+  mutate(freq = n / sum(n))
+#perc_ann
+```
+
+
+```{r}
+library(stringr)
+full_meta = read.csv('../../../meta_link/meta_mibi_dsp.csv', na.strings=c("","NA"))
+colnames(full_meta)[2] = "run"
+colnames(full_meta)[3] = "fov"
+
+perc_ann = left_join(perc_ann, full_meta, by = c('fov', 'run'))
+perc_ann$X.x <- NULL
+perc_ann$X.y <- NULL
+
+# add more meta info
+perc_ann$tissue = str_sub(perc_ann$run, -7,-6)
+perc_ann$treatment = str_sub(perc_ann$tissue, -3,-2)
+
+# other immune in small intestine
+perc_ann_my_lg = subset(perc_ann, (perc_ann$location == 'Large' & perc_ann$annV1 == 'Myeloid'))
+perc_ann_my_lg = perc_ann_my_lg[!is.na(perc_ann_my_lg$DSP_Ecad_name),]
+perc_ann_my_lg_top = perc_ann_my_lg[order(perc_ann_my_lg$freq, decreasing = T)[1:15],] # tried 20 then 15
+```
+
+
+```{r}
+## read in dsp data
+
+dsp_counts = read.csv('../../dsp_related/final_data/microdsp_q3Counts.csv')
+sampname = dsp_counts$X
+## read in meta data for dsp
+meta = read.table("../../dsp_related/final_data/meta_analys_use.txt", sep = '\t', header = T, na.strings=c("","NA"))
+## need to remove some samples since no coutns somehow
+meta = meta[meta$Sample_ID %in% sampname,]
+sampnametarget = meta$Sample_ID[meta$slide.name != '0117-BCR' &
+                                  meta$segment != 'Full ROI' &
+                                  meta$slide.name != 'No Template Control']# sample names for wta analysis
+meta_host = meta[meta$slide.name != '0117-BCR' &
+                                  meta$segment != 'Full ROI' &
+                                  meta$slide.name != 'No Template Control',]# sample names for wta analysis
+meta_host$treatment = substr(meta_host$tag2, 0, 1)
+dsp_counts = dsp_counts[match(sampnametarget, sampname), ]
+dsp_counts$X = NULL
+
+## add new description
+meta_host$high_macmo_cd45 = 'No'
+meta_host$high_macmo_cd45[match(perc_ann_my_lg_top$DSP_CD45_name, meta_host$Sample_ID)] = 'Yes'
+```
+
+
+```{r}
+### gsva scoring
+library(GSVA)
+
+# smoothmuscle prolifferation score, based on same term in GO:BP
+targetgenes = c('Itgb3','C3ar1','Akt1','Nr4a3','Stat5b','Cyba','Bmpr1a','Hmgcr','Gnai2','Ern1','Bmp4','Mmp9','Camk2d','Aif1','Tgm2','Id2','Jak2','Pdgfrb','Ereg','Mmp2','Hif1a','Thbs1','Igfbp5')
+
+targetScore=gsva(t(dsp_counts),list(targetgenes),method="ssgsea",ssgsea.norm=TRUE,verbose=T)
+meta_host$smooth_prolif = t(targetScore)
+
+# quick check
+temp = subset(meta_host, meta_host$segment == 'CD45')
+#temp = df_meta
+p1 = ggplot(temp, aes(x=high_macmo_cd45, y=(smooth_prolif), fill = high_macmo_cd45)) + 
+  geom_violin(trim=FALSE, show.legend = FALSE)+
+  geom_boxplot(width=0.05, fill = 'white')+
+  theme_bw() + ggtitle('sma prolif') + scale_fill_manual(values=c("#00966d", "#cf4528"))
+p1
+
+```
+
+```{r}
+# smoothmuscle migration score, based on same term in GO:BP
+targetgenes = c('Mdm2','Crk','Arpc2','Il18','Sema6d','Lpar1','Lrp1','P2ry2','Egr1','Ptger4','Itgb3','Nr4a3','Stat5b','Dock7','F3','Postn','Smo','Tmsb4x','Camk2d','Plau','Aif1','Pdgfrb','S100a11','Igfbp5')
+
+targetScore=gsva(t(dsp_counts),list(targetgenes),method="ssgsea",ssgsea.norm=TRUE,verbose=T)
+meta_host$smooth_migration = t(targetScore)
+
+# quick check
+temp = subset(meta_host, meta_host$segment == 'CD45')
+#temp = df_meta
+p2 = ggplot(temp, aes(x=high_macmo_cd45, y=(smooth_migration), fill = high_macmo_cd45)) + 
+  geom_violin(trim=FALSE, show.legend = FALSE)+
+  geom_boxplot(width=0.05, fill = 'white')+
+  theme_bw() + ggtitle('sma mig') + scale_fill_manual(values=c("#00966d", "#cf4528"))
+p2
+
+```
+
+```{r}
+# macropahge chemotaxis score, based on same term in GO:BP
+targetgenes = c('Ptprj','C3ar1','C5ar1','Mmp9','Rarres2','Ninj1','Ednrb','Csf1r','Mmp2','Thbs1')
+
+targetScore=gsva(t(dsp_counts),list(targetgenes),method="ssgsea",ssgsea.norm=TRUE,verbose=T)
+meta_host$mac_chm = t(targetScore)
+
+# quick check
+temp = subset(meta_host, meta_host$segment == 'CD45')
+#temp = df_meta
+p3 = ggplot(temp, aes(x=high_macmo_cd45, y=(mac_chm), fill = high_macmo_cd45)) + 
+  geom_violin(trim=FALSE, show.legend = FALSE)+
+  geom_boxplot(width=0.05, fill = 'white')+
+  theme_bw() + ggtitle('mac che') + scale_fill_manual(values=c("#00966d", "#cf4528"))
+p3
+
+```
+
+```{r}
+# monocyte chemotaxis score, based on same term in GO:BP
+targetgenes = c('Ccl19','Cxcl12','Ano6','Anxa1','S100a14','Ninj1','Ccl6','Ccl11','Aif1','Ccl17','Dusp1','Ccl8','Lgmn')
+
+targetScore=gsva(t(dsp_counts),list(targetgenes),method="ssgsea",ssgsea.norm=TRUE,verbose=T)
+meta_host$mon_chm = t(targetScore)
+
+# quick check
+temp = subset(meta_host, meta_host$segment == 'CD45')
+#temp = df_meta
+p4 = ggplot(temp, aes(x=high_macmo_cd45, y=(mac_chm), fill = high_macmo_cd45)) + 
+  geom_violin(trim=FALSE, show.legend = FALSE)+
+  geom_boxplot(width=0.05, fill = 'white')+
+  theme_bw() + ggtitle('mon che') + scale_fill_manual(values=c("#00966d", "#cf4528"))
+p4
+
+```
+
+```{r}
+# plot all
+library(patchwork)
+plots <- list(p1, p2, p3, p4)
+pall = wrap_plots(plots)
+ggsave('../plots/mac_mono_scores.svg', height = 4, width = 5)
+pall
+```
+
+
+
+We also want to acquire the test statistics:
+
+```{r}
+## get padj for all t tests
+x = meta_host$smooth_prolif[meta_host$high_macmo_cd45 == 'No']
+y = meta_host$smooth_prolif[meta_host$high_macmo_cd45 == 'Yes']
+t.test(x, y, alternative = "two.sided",) # 5.508e-06 * 4 = 2.2032e-05
+```
+
+```{r}
+## get padj for all t tests
+x = meta_host$smooth_migration[meta_host$high_macmo_cd45 == 'No']
+y = meta_host$smooth_migration[meta_host$high_macmo_cd45 == 'Yes']
+t.test(x, y, alternative = "two.sided",) # 1.785e-05 * 4 = 7.14e-05
+```
+
+```{r}
+## get padj for all t tests
+x = meta_host$mac_chm[meta_host$high_macmo_cd45 == 'No']
+y = meta_host$mac_chm[meta_host$high_macmo_cd45 == 'Yes']
+t.test(x, y, alternative = "two.sided",) # 1.041e-06 * 4 = 4.164e-06
+```
+
+```{r}
+## get padj for all t tests
+x = meta_host$mon_chm[meta_host$high_macmo_cd45 == 'No']
+y = meta_host$mon_chm[meta_host$high_macmo_cd45 == 'Yes']
+t.test(x, y, alternative = "two.sided",) # 1.62e-08 * 4 = 6.48e-08
+```
+
+

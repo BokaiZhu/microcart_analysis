@@ -1,0 +1,209 @@
+---
+title: "glycan_cellfreq"
+output: html_document
+---
+
+### goal for this script is to get correlation between cell type (MIBI)
+### and glycan expression (MALDI)
+
+```{r}
+library(dplyr)
+library(tidyverse)
+library(tidyr)
+## make sure donut sequence all the same for all modalities
+meta_all = read.csv('../../../meta_link/meta_mibi_dsp.csv')
+meta_all$X.1 = NULL
+#maldi_fov = read.csv('../data/fov_maldi_extracted.csv')
+#meta_3 = left_join(meta_all, maldi_fov, by = c("X" = "id"))
+meta_all3 = subset(meta_all, meta_all$DSP_Bac_name != '' & meta_all$DSP_Ecad_name != '' &
+         meta_all$DSP_CD45_name != '')
+meta_all3$id = meta_all3$X
+head(meta_all3) #78
+
+## first do mibi related stuff
+mibidf = read.csv('../../MIBI_analysis/final_data/host_csv/mibi_cell_resultann_0411.csv')
+# link meta info
+temp = meta_all3
+colnames(temp) = c('X', 'run', 'fov', 'location', 'DSP_Ecad_name', 'DSP_CD45_name', 'DSP_Bac_name',
+                   'tissueID', 'MALDI.ID', 'id')
+mibi_meta = left_join(mibidf, temp, by = c('run', 'fov'))
+mibi_meta = subset(mibi_meta, !is.na(mibi_meta$id))
+
+# start average percentage
+mibi_meta %>% group_by(id, annV1) %>%  summarise(n = n()) %>%
+  mutate(freq = n / sum(n)) -> celltyp_freq
+
+celltyp_freq = as.data.frame(celltyp_freq)
+celltyp_freq$n <- NULL
+celltyp_multi <- as.data.frame(spread(celltyp_freq, key = "id", value = "freq", fill = 0))
+rownames(celltyp_multi) = celltyp_multi$annV1
+celltyp_multi$annV1 <- NULL
+#head(celltyp_multi)
+```
+
+
+```{r, warning=FALSE}
+# glycan expression
+gexp = read.csv('../../multiomics/data/fov_maldi_extracted.csv')
+#gexp = as.data.frame(t(gexp))/1000 # just some arbitrary scaling
+gexp$id = as.character(gexp$id)
+gexp2 = gexp[match(colnames(celltyp_multi),gexp$id),]
+#gexp2$id = NULL
+rownames(gexp2) = gexp2$id
+glyc = colnames(gexp2)
+gexp2 = as.data.frame(t(gexp2))
+gexp2 = gexp2[-1,]
+gexp2 <- sapply( gexp2, as.numeric )
+gexp2 = gexp2/1000
+rownames(gexp2) = glyc[1:38]
+gexp2 = as.data.frame(gexp2)
+#head(gexp2)
+
+target_id = Reduce(intersect, list(colnames(celltyp_multi), colnames(gexp2)))
+length(target_id) # 35 to go should be fine
+#target_id
+```
+
+
+```{r, warning=FALSE}
+## prep data
+mibi = as.data.frame(t(celltyp_multi[,target_id]))
+maldi = as.data.frame(t(gexp2[,target_id]))
+
+cro_cor = cbind(mibi, maldi)
+
+library(RcmdrMisc)
+corrM_cro = rcorr.adjust((cro_cor),type="spearman")
+corrMa_cro = corrM_cro$R$r
+corrP_cro = as.data.frame(corrM_cro$P)
+corrP_cro[corrP_cro == '<.0001'] = 0 # for convinient
+corrP_cro <- mutate_all(corrP_cro, function(x) as.numeric(as.character(x)))
+
+# only need cross modality sig
+corrP_cro = corrP_cro[c(14:51),c(1:13)]
+#3corrP_cro_sig = corrP_cro[corrP_cro < 0.05]
+
+# manually check the results and record
+# significant correlations:
+#Hex4dHex1HexNAc5 -- DC
+#Hex5dHex1HexNAc5 -- DC
+#Hex5HexNAc5NeuAc1 -- epi-muc
+#Hex5dHex2HexNAc4 -- ki67
+#Hex3dHex1HexNAc2 -- ki67
+#Hex4HexNAc2 -- ki67
+
+library(ggpubr)
+p <- ggplot(cro_cor, aes(Hex5dHex2HexNAc4, `Smooth muscle (Ki67 high)`)) + 
+    geom_point() +  stat_smooth(method = "lm") +
+    xlab('Hex5dHex2HexNAc4') + ylab('Ki67 + Smooth muscle') +  stat_cor() + theme_classic()
+#ggsave('../plots/epi-2_ratio.svg', height = 2.5, width = 7.5)
+p
+
+```
+
+```{r}
+library(ggpubr)
+p <- ggplot(cro_cor, aes(Hex4dHex1HexNAc5, `DC`)) + 
+    geom_point() +  stat_smooth(method = "lm") +
+    xlab('Hex4dHex1HexNAc5') + ylab('DC') +  stat_cor() + theme_classic()
+#ggsave('../plots/epi-2_ratio.svg', height = 2.5, width = 7.5)
+p
+
+```
+
+```{r}
+library(ggpubr)
+p <- ggplot(cro_cor, aes(Hex5HexNAc5NeuAc1, `Epithelial (Muc2+)`)) + 
+    geom_point() +  stat_smooth(method = "lm") +
+    xlab('Hex5HexNAc5NeuAc1') + ylab('Epithelial (Muc2+)') +  stat_cor() + theme_classic()
+#ggsave('../plots/epi-2_ratio.svg', height = 2.5, width = 7.5)
+p
+
+```
+
+
+
+
+
+
+
+
+
+########### script ended
+########### code below is just for checking/controling the result robustness.
+
+```{r}
+## ok to be thorough 
+## need to check is not due to small/large difference
+meta_all3$state = substr(meta_all3$tissueID, 1, 1)
+state = meta_all3$state[match(target_id, meta_all3$id)]
+cro_cor$state = state
+
+p <- ggplot(cro_cor, aes(Hex5HexNAc5NeuAc1, `Epithelial (Muc2+)`)) + 
+    geom_point( aes(fill = state), size = 2.5, stroke = 0.2, color = 'black', shape = 21) +
+  stat_smooth(method = "lm") +
+    xlab('Hex5HexNAc5NeuAc1') + ylab('Epithelial (Muc2+)') +  stat_cor() + theme_classic() +
+  scale_fill_manual(values = c('#414487FF', '#FDE725FF'))
+ggsave('../plots/glyc_celltype_p1.svg', height = 2.5, width = 4)
+p
+###
+
+p <- ggplot(cro_cor, aes(Hex4dHex1HexNAc5, `DC`)) + 
+    geom_point( aes(fill = state), size = 2.5, stroke = 0.2, color = 'black', shape = 21) +
+  stat_smooth(method = "lm") +
+    xlab('Hex4dHex1HexNAc5') + ylab('DC') +  stat_cor() + theme_classic() +
+  scale_fill_manual(values = c('#414487FF', '#FDE725FF'))
+ggsave('../plots/glyc_celltype_p2.svg', height = 2.5, width = 4)
+p
+
+
+###
+
+p <- ggplot(cro_cor, aes(Hex5dHex2HexNAc4, `Smooth muscle (Ki67 high)`)) + 
+    geom_point( aes(fill = state), size = 2.5, stroke = 0.2, color = 'black', shape = 21) +
+  stat_smooth(method = "lm") +
+    xlab('Hex5dHex2HexNAc4') + ylab('Smooth muscle (Ki67 high)') +  stat_cor() + theme_classic() +
+  scale_fill_manual(values = c('#414487FF', '#FDE725FF'))
+ggsave('../plots/glyc_celltype_p3.svg', height = 2.5, width = 4)
+p
+
+
+```
+
+
+
+
+###### below is just double checking result is unbiased
+
+
+```{r}
+## ok to be thorough 
+## need to check is not due to small/large difference
+loc = meta_all3$location[match(target_id, meta_all3$id)]
+cro_cor$loc = loc
+
+p <- ggplot(cro_cor, aes(Hex5HexNAc5NeuAc1, `Epithelial (Muc2+)`)) + 
+    geom_point( aes(color = loc)) +  stat_smooth(method = "lm") +
+    xlab('Hex5HexNAc5NeuAc1') + ylab('Epithelial (Muc2+)') +  stat_cor() + theme_classic()
+#ggsave('../plots/epi-2_ratio.svg', height = 2.5, width = 7.5)
+p
+
+p <- ggplot(cro_cor, aes(Hex4dHex1HexNAc5, `DC`)) + 
+    geom_point(aes(color = loc)) +  stat_smooth(method = "lm") +
+    xlab('Hex4dHex1HexNAc5') + ylab('DC') +  stat_cor() + theme_classic()
+#ggsave('../plots/epi-2_ratio.svg', height = 2.5, width = 7.5)
+p
+
+p <- ggplot(cro_cor, aes(Hex5dHex2HexNAc4, `Smooth muscle (Ki67 high)`)) + 
+    geom_point(aes(color = loc)) +  stat_smooth(method = "lm") +
+    xlab('Hex5dHex2HexNAc4') + ylab('Ki67 + Smooth muscle') +  stat_cor() + theme_classic()
+#ggsave('../plots/epi-2_ratio.svg', height = 2.5, width = 7.5)
+p
+
+```
+
+
+
+
+
+

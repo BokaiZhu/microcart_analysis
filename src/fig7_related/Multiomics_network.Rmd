@@ -1,0 +1,514 @@
+---
+title: "multiomicsV2"
+output: html_document
+---
+
+Script for constructing a multiomics network:
+
+
+first read meta infomraiton that contains unique ids to link samples:
+```{r}
+library(dplyr)
+library(tidyverse)
+library(tidyr)
+## make sure donut sequence all the same for all modalities
+meta_all = read.csv('../../../meta_link/meta_mibi_dsp.csv')
+meta_all$X.1 = NULL
+meta_all3 = subset(meta_all, meta_all$DSP_Bac_name != '' & meta_all$DSP_Ecad_name != '' &
+         meta_all$DSP_CD45_name != '')
+meta_all3$id = meta_all3$X
+#head(meta_all3) #78
+```
+
+
+read mibi data (host info)
+```{r}
+
+## first do mibi related stuff
+mibidf = read.csv('../../MIBI_analysis/final_data/host_csv/mibi_cell_resultann_0411.csv')
+# link meta info
+temp = meta_all3
+colnames(temp) = c('X', 'run', 'fov', 'location', 'DSP_Ecad_name', 'DSP_CD45_name', 'DSP_Bac_name',
+                   'tissueID', 'MALDI.ID', 'id')
+mibi_meta = left_join(mibidf, temp, by = c('run', 'fov'))
+mibi_meta = subset(mibi_meta, !is.na(mibi_meta$id))
+
+# start average percentage
+mibi_meta %>% group_by(id, annV1) %>%  summarise(n = n()) %>%
+  mutate(freq = n / sum(n)) -> celltyp_freq
+
+celltyp_freq = as.data.frame(celltyp_freq)
+celltyp_freq$n <- NULL
+celltyp_multi <- as.data.frame(spread(celltyp_freq, key = "id", value = "freq", fill = 0))
+rownames(celltyp_multi) = celltyp_multi$annV1
+celltyp_multi$annV1 <- NULL
+#head(celltyp_multi)
+```
+
+read mibi data (bacteria info)
+
+```{r}
+## on bacteria mibi related stuff
+bacm_df = read.csv('../../MIBI_analysis/final_data/bac_csv/bac_sig_extract_sizeNormed.csv')
+bacm_df[,c('Alx488_v3', 'DIG_v3', 'FITC_v3', 'TAMRA_v3')] = 10000 * bacm_df[,c('Alx488_v3', 'DIG_v3', 'FITC_v3', 'TAMRA_v3')] # slight scale up to match rough percentage range ps this does not matter\\
+bacm_meta = left_join(bacm_df, temp, by = c('run', 'fov'))
+bacm_meta = subset(bacm_meta, !is.na(bacm_meta$id))
+
+bacm_meta %>% group_by(id) %>% summarise_all(mean) -> bacm_sum
+bacm_sum = as.data.frame(bacm_sum[,c('Alx488_v3', 'DIG_v3', 'FITC_v3', 'TAMRA_v3','id')])
+rownames(bacm_sum) = bacm_sum$id
+bacm_sum$id = NULL
+
+bacM_multi <- as.data.frame(t(bacm_sum))
+#head(bacM_multi)
+```
+
+
+read dsp data (bacteria info)
+
+```{r}
+## read in the data first, this case we do not care about bacteria related rois, already removed
+
+dsp_counts = read.csv('../../dsp_related/final_data/microdsp_q3V2Counts.csv')
+sampname = dsp_counts$X
+## read in meta data for dsp
+meta = read.table("../../dsp_related/final_data/meta_analys_use.txt", sep = '\t', header = T, na.strings=c("","NA"))
+## need to remove some samples since no coutns somehow
+meta = meta[meta$Sample_ID %in% sampname,]
+sampnametarget = meta$Sample_ID[meta$slide.name != '0117-BCR' &
+                                  #meta$segment != 'Full ROI' &
+                                  meta$segment != 'CD45' &
+                                  meta$segment != 'Ecad' &
+                                  meta$slide.name != 'No Template Control']# sample names for wta analysis
+meta_host = meta[meta$slide.name != '0117-BCR' &
+                                  #meta$segment != 'Full ROI' &
+                                  meta$segment != 'CD45' &
+                                  meta$segment != 'Ecad' &
+                                  meta$slide.name != 'No Template Control',]# sample names for wta analysis
+meta_host$treatment = substr(meta_host$tag2, 0, 1)
+dsp_counts = dsp_counts[match(sampnametarget, sampname), ]
+dsp_counts$X = NULL
+dsp_counts$Sample_ID = meta_host$Sample_ID
+
+##### get meta data
+temp4 = temp[,c('DSP_Bac_name', 'id')]
+temp4 = temp4[temp4$DSP_Bac_name != '',]
+colnames(temp4) = c('Sample_ID', 'id')
+dsp_bac_meta = left_join(dsp_counts, temp4, by = 'Sample_ID')
+dsp_bac_meta = subset(dsp_bac_meta, !is.na(dsp_bac_meta$id))
+
+# average across donuts
+dsp_bac_meta %>% group_by(id) %>% summarise_all(mean) %>% dplyr::select(-Sample_ID) -> dsp_bac_sum
+dsp_bac_sum = as.data.frame(dsp_bac_sum)
+rownames(dsp_bac_sum) = dsp_bac_sum$id
+dsp_bac_sum$id = NULL
+dsp_bac_sum = as.data.frame(t(dsp_bac_sum))/1000000 # totally arbitrary scalling scheme
+#head(dsp_bac_sum)
+```
+
+read dsp data (host info)
+
+```{r}
+## read in the data first, this case we do not care about bacteria related rois, already removed
+
+dsp_counts = read.csv('../../dsp_related/final_data/microdsp_q3Counts.csv')
+sampname = dsp_counts$X
+## read in meta data for dsp
+meta = read.table("../../dsp_related/final_data/meta_analys_use.txt", sep = '\t', header = T, na.strings=c("","NA"))
+## need to remove some samples since no coutns somehow
+meta = meta[meta$Sample_ID %in% sampname,]
+sampnametarget = meta$Sample_ID[meta$slide.name != '0117-BCR' &
+                                  meta$segment != 'Full ROI' &
+                                  meta$slide.name != 'No Template Control']# sample names for wta analysis
+meta_host = meta[meta$slide.name != '0117-BCR' &
+                                  meta$segment != 'Full ROI' &
+                                  meta$slide.name != 'No Template Control',]# sample names for wta analysis
+meta_host$treatment = substr(meta_host$tag2, 0, 1)
+dsp_counts = dsp_counts[match(sampnametarget, sampname), ]
+dsp_counts$X = NULL
+
+##### input formating finished
+
+
+### start doing svd but lets seperate cd45 reg and ecad reg
+dsp_counts_cd45 = dsp_counts[meta_host$segment == 'CD45',]
+dsp_counts_ecad = dsp_counts[meta_host$segment == 'Ecad',]
+## meta
+dsp_meta_cd45 = meta_host[meta_host$segment == 'CD45',]
+dsp_meta_ecad = meta_host[meta_host$segment == 'Ecad',]
+
+## start svd on each different segment
+dsp_counts_cd45_svd = svd(scale(dsp_counts_cd45))
+#plot(dsp_counts_cd45_svd$d) # looks like 20 is more than enough
+## start svd on each different segment
+dsp_counts_ecad_svd = svd(scale(dsp_counts_ecad))
+#plot(dsp_counts_ecad_svd$d) # looks like 20 is more than enough
+```
+
+SVD dsp host information (dimension reduction)
+
+```{r}
+library(reshape2)
+
+# quick function on get top k data
+
+getsvd = function(input, k){ # input should be a svd object
+  # use top 15 svd components
+  U <- as.matrix(input$u[, 1:k])
+  d = diag(input$d)
+  d <- as.matrix(d[1:k, 1:k])
+  V <- as.matrix(input$v[, 1:k])
+  res <- U %*% d #%*% t(V15)
+  res = as.data.frame(res)
+  colnames(res) = paste0('svd_',c(1:k))
+  return(res)
+  
+}
+
+dsp_cd45_svd20 = getsvd(dsp_counts_cd45_svd, 20)
+dsp_ecad_svd20 = getsvd(dsp_counts_ecad_svd, 20)
+
+# then we link the files to maldi id
+temp2 = temp[,c('DSP_Ecad_name', 'DSP_CD45_name', 'id')]
+temp2 = temp2[temp2$DSP_Ecad_name != '' &
+        temp2$DSP_CD45_name != '',]
+a = temp2[,c(1,3)]
+a$type = 'Ecad'
+b = temp2[,c(2,3)]
+b$type = 'CD45'
+colnames(a) = c('sid', 'id', 'type')
+colnames(b) = c('sid', 'id', 'type')
+temp3 = rbind(a,b)
+
+# link information
+dsp_cd45_svd20$sid = dsp_meta_cd45$Sample_ID
+dsp_ecad_svd20$sid = dsp_meta_ecad$Sample_ID
+dsp_cd45_svd20_meta = left_join(dsp_cd45_svd20, temp3, by = 'sid')
+dsp_ecad_svd20_meta = left_join(dsp_ecad_svd20, temp3, by = 'sid')
+
+## final format clean up cd45 version
+dsp_cd45_svd20_meta %>% group_by(id) %>% summarise_all(mean)  %>%
+  dplyr::select(-sid, -type) %>% na.omit() -> dsp_svd20_sum_cd45
+rownames(dsp_svd20_sum_cd45) = dsp_svd20_sum_cd45$id
+dsp_svd20_sum_cd45 = as.data.frame(t(dsp_svd20_sum_cd45))
+dsp_svd20_sum_cd45 = dsp_svd20_sum_cd45[-1,]
+rownames(dsp_svd20_sum_cd45) = paste0('cd45_', rownames(dsp_svd20_sum_cd45))
+#head(dsp_svd20_sum_cd45) # do we do averag
+```
+
+clean up:
+
+```{r}
+## final format clean up cd45 version
+dsp_ecad_svd20_meta %>% group_by(id) %>% summarise_all(mean)  %>%
+  dplyr::select(-sid, -type) %>% na.omit() -> dsp_svd20_sum_ecad
+rownames(dsp_svd20_sum_ecad) = dsp_svd20_sum_ecad$id
+dsp_svd20_sum_ecad = as.data.frame(t(dsp_svd20_sum_ecad))
+dsp_svd20_sum_ecad = dsp_svd20_sum_ecad[-1,]
+rownames(dsp_svd20_sum_ecad) = paste0('ecad_', rownames(dsp_svd20_sum_ecad))
+#head(dsp_svd20_sum_ecad) # do we do averag
+```
+
+For SVD reduction dimension (PCs), get contribution of genes for each PC
+
+for cd45 PCs
+```{r}
+# it is important to make the svd components interpretable
+gene_names = colnames(dsp_counts)
+cd45_loading = dsp_counts_cd45_svd$v
+rownames(cd45_loading) = gene_names
+
+##### dis is stupid, directly make into dataframe
+
+nl = list()
+posl = list()
+negl = list()
+
+for (i in c(1:20)){
+  name = 'CD45_PC'
+  name = paste0(name,as.character(i))
+  nl = c(nl, name)
+  
+  # get top loading 
+  g = gene_names[order(cd45_loading[,i], decreasing = F)[c(1:10)]]
+  s = ''
+  for (gg in g){
+    s = paste0(s, ',', gg)
+  }
+  posl = c(posl, s)
+  
+  # get neg loading 
+  g = gene_names[order(cd45_loading[,i], decreasing = T)[c(1:10)]]
+  s = ''
+  for (gg in g){
+    s = paste0(s, ',', gg)
+  }
+  negl = c(negl, s)
+  
+}
+posl = unlist(posl)
+negl = unlist(negl)
+nl = unlist(nl)
+
+df = data.frame(name = nl, pos = posl, neg = negl)
+df$pos <- substring(df$pos, 2)
+df$neg <- substring(df$neg, 2)
+
+#write.csv(df, '../data/CD45_PC_exp_local.csv', row.names = F) # note this is same dont need to redo
+```
+
+for Ecad PCs
+```{r}
+# it is important to make the svd components interpretable
+gene_names = colnames(dsp_counts)
+ecad_loading = dsp_counts_ecad_svd$v
+rownames(ecad_loading) = gene_names
+
+##### dis is stupid, directly make into dataframe
+
+nl = list()
+posl = list()
+negl = list()
+
+for (i in c(1:20)){
+  name = 'Ecad_PC'
+  name = paste0(name,as.character(i))
+  nl = c(nl, name)
+  
+  # get top loading 
+  g = gene_names[order(ecad_loading[,i], decreasing = F)[c(1:10)]]
+  s = ''
+  for (gg in g){
+    s = paste0(s, ',', gg)
+  }
+  posl = c(posl, s)
+  
+  # get neg loading 
+  g = gene_names[order(ecad_loading[,i], decreasing = T)[c(1:10)]]
+  s = ''
+  for (gg in g){
+    s = paste0(s, ',', gg)
+  }
+  negl = c(negl, s)
+  
+}
+posl = unlist(posl)
+negl = unlist(negl)
+nl = unlist(nl)
+
+df = data.frame(name = nl, pos = posl, neg = negl)
+df$pos <- substring(df$pos, 2)
+df$neg <- substring(df$neg, 2)
+
+#write.csv(df, '../data/Ecad_PC_exp_local.csv', row.names = F)
+```
+
+
+read data (MALDI info)
+
+```{r}
+# glycan expression
+gexp = read.csv('../../multiomics/data/fov_maldi_extracted.csv')
+#gexp = as.data.frame(t(gexp))/1000 # just some arbitrary scaling
+gexp$id = as.character(gexp$id)
+gexp2 = gexp[match(colnames(dsp_svd20_sum_ecad),gexp$id),]
+#gexp2$id = NULL
+rownames(gexp2) = gexp2$id
+glyc = colnames(gexp2)
+gexp2 = as.data.frame(t(gexp2))
+gexp2 = gexp2[-1,]
+gexp2 <- sapply( gexp2, as.numeric )
+gexp2 = gexp2/1000
+rownames(gexp2) = glyc[1:38]
+gexp2 = as.data.frame(gexp2)
+#head(gexp2)
+```
+
+get sample ids with simultaneous informaiton from three differenet modalities:
+
+```{r}
+target_id = Reduce(intersect, list(colnames(celltyp_multi), colnames(bacM_multi),
+          colnames(dsp_svd20_sum_cd45), colnames(dsp_svd20_sum_ecad),
+          colnames(dsp_bac_sum), colnames(gexp2)))
+length(target_id) # 77 to go should be fine
+target_id
+```
+
+rename features
+
+```{r}
+rownames(celltyp_multi) = paste0('MIBIcell__', rownames(celltyp_multi))
+rownames(bacM_multi) = paste0('MIBIbac__', rownames(bacM_multi))
+rownames(dsp_svd20_sum_cd45) = paste0('DSPcd45__', rownames(dsp_svd20_sum_cd45))
+rownames(dsp_svd20_sum_ecad) = paste0('DSPecad__', rownames(dsp_svd20_sum_ecad))
+rownames(dsp_bac_sum) = paste0('DSPbac__', rownames(dsp_bac_sum))
+rownames(gexp2) = paste0('MALDIglyc__', rownames(gexp2))
+#rownames(piperc) = paste0('MALDImeta__', rownames(piperc))
+
+multiomic = do.call('rbind', list(celltyp_multi[,target_id],
+                                  bacM_multi[,target_id], dsp_svd20_sum_cd45[,target_id],
+                                  dsp_svd20_sum_ecad[,target_id], dsp_bac_sum[,target_id], 
+                                  gexp2[,target_id]
+                                  ))
+#head(multiomic)
+```
+
+```{r}
+# quick make a new column, status means C or T which is colitis or not
+meta_all3$status = substr(meta_all3$tissueID, 0, 1)
+status = meta_all3$status[match(target_id, meta_all3$id)]
+table(status)
+```
+
+calculate correlation
+
+```{r}
+#library(Hmisc)
+library(RcmdrMisc)
+
+corrM = rcorr.adjust(t(multiomic),type="spearman")
+
+## only adj significant
+corrMa = corrM$R$r
+# conver correlation matrix to distance matrix
+corrMa = (1- corrMa) / 2
+corrP = as.data.frame(corrM$P)
+corrP[corrP == '<.0001'] = 0 # for convinient
+corrP <- mutate_all(corrP, function(x) as.numeric(as.character(x)))
+```
+
+construct graph
+
+```{r}
+## start testing some graph plotting
+library(igraph)
+library(ggnetwork)
+library(tidyr)
+
+##
+set.seed(42)
+mst_multi = ape::mst(corrMa)
+mst_adj = graph.adjacency(mst_multi, mode = "undirected")
+
+node_data1 <- (layout.fruchterman.reingold(mst_adj)) # fr layout
+gg = ggnetwork(mst_adj, arrow.gap = 0, layout = node_data1)
+gg$nameid = gg$name 
+gg = separate_wider_delim(gg, cols = name, delim = "__", names = c("mode", "label"))
+
+## add response id
+#gg2 = left_join(gg, responsedf, by = 'nameid')
+```
+
+construct sub-graph
+
+```{r}
+## also now we create a sub graph 
+link_adj = corrP
+#link_adj[link_adj <=2] = 0
+link_adj[is.na(link_adj)] = 0
+link_adj[corrP < 0.05] = 1 # only link if correlation is significant
+link_adj[corrP >= 0.05  ] = 0 # no link for non sig ones
+link_adj = as.matrix(link_adj)
+#mode(link_adj) <- "integer"
+
+# make ajd graph
+sig_adj <- graph.adjacency(link_adj, mode = "undirected")
+
+gg_sig = ggnetwork(sig_adj, arrow.gap = 0, layout = node_data1) # same node placement
+gg_sig$nameid = gg_sig$name 
+gg_sig = separate_wider_delim(gg_sig, cols = name, delim = "__", names = c("mode", "label"))
+```
+
+Count cross-modality significant correlations of features
+Not counting with-in modality correlations here.
+
+```{r}
+## calculate cross mod linkage
+temp = rownames(link_adj)
+modlist = str_sub(temp, 1,3)
+link_save = list()
+
+for (i in c(1:length(modlist))){
+  cur = modlist[i]
+  count = 0
+  for (j in c(1:length(modlist))){
+    tar = modlist[j]
+    
+    if (cur != tar & link_adj[i,j] == 1){ # make sure not in same modality
+      #print(c(cur, tar))
+      count = count + 1
+    }
+  }
+  link_save = c(link_save, count)
+  
+}
+link_save = unlist(link_save)
+#link_save
+
+check = data.frame(nameid = rownames(link_adj), cross = link_save)
+gg2 = left_join(gg, check, by = 'nameid')
+#head(gg2)
+```
+
+```{r}
+## list out features with most cross modality correlation (significant) counts:
+hcrosscf1 = c('DSPecad__ecad_svd_1', 'DSPbac__Pro', 'DSPcd45__cd45_svd_2',
+             'DSPbac__Firm', 'DSPbac__PAN', 'DSPbac__Bac', 'DSPecad__ecad_svd_2',
+             'MALDIglyc__Hex4dHex1HexNAc3', 'MALDIglyc__Hex3dHex1HexNAc3',
+             'MALDIglyc__Hex5HexNAc4', 'MALDIglyc__Hex7dHex1HexNAc6',
+             'MALDIglyc__Hex4dHex2HexNAc4', 'MALDIglyc__Hex5dHex2HexNAc5',
+             'MALDIglyc__Hex5HexNAc4NeuAc1', 'MALDIglyc__Hex5dHex2HexNAc4')
+
+########
+## these features will be labeled on the image
+hcrosscf = hcrosscf1
+gg_text = gg_sig
+gg_text = gg_text[gg_text$nameid %in% hcrosscf,]
+gg_text$xend = NULL
+gg_text$yend = NULL
+gg_text = gg_text[!duplicated(gg_text),]
+```
+
+### start plotting
+
+```{r}
+library(ggrepel)
+# two layer graph??
+
+## make color panel
+clr_pl = c('#445D48', '#03C988', '#BFDB38', # green
+           '#279EFF',  # blue
+           '#C70039', '#F78CA2' # red
+           )
+
+names(clr_pl) <- c( "DSPcd45", "DSPecad", "DSPbac",
+                     "MALDIglyc",
+                    'MIBIcell','MIBIbac'
+                     )
+###
+
+p = ggplot() +
+  geom_edges(gg_sig, mapping = aes(x = x, y = y, xend = xend, yend = yend),
+             color = "grey", lwd = 0.15, alpha = 0.6) +
+  geom_edges(gg2, mapping = aes(x = x, y = y, xend = xend, yend = yend) ,color = "black", lwd = 0.25) +
+  #geom_nodes(aes(size = -log10(t_padj) * 7.5), color = 'black', alpha = 0.8) +
+  geom_point(gg2, mapping = aes(x = x, y = y, fill = mode, size = (cross) ),
+             shape = 21, stroke = 0.5) +
+  theme_blank() +
+  scale_fill_manual(values = clr_pl) + 
+  geom_label_repel(gg_text, mapping = aes(x= x, y = y,label = label),
+                      color = "black", size = 2, max.overlaps = Inf,
+                      segment.size = 0.1, segment.color = 'red',
+                      box.padding = 0.5, fill = alpha(c("white"),0.3),
+                   min.segment.length = unit(0, 'lines')) +
+  theme(plot.margin = unit(c(0, 1, 1, 6), "cm"))+
+   theme(legend.position = c(0, 0.3),
+      legend.background = element_blank(),
+      legend.text = element_text(size = 7))
+ggsave('../plots/ggnet_nov10.png', width = 7, height = 5.5)
+ggsave('../plots/ggnet_nov10.svg', width = 7, height = 5.5)
+p
+
+```
+
+

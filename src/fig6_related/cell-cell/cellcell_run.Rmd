@@ -1,0 +1,167 @@
+---
+title: "cellcell"
+output: html_document
+---
+
+Code used to produce cell cell interaction distance analysis, in figure 6.
+
+```{r}
+library(dplyr)
+library(tidyverse)
+library(parallel)
+
+source('./get_triangulation_distances.R')
+source('./iterate_triangulation_distance.R')
+```
+
+
+```{r}
+mibidf = read_csv('../../../MIBI_analysis/final_data/host_csv/mibi_cell_resultann_0411.csv')
+full_meta = read.csv('../../../../meta_link/meta_mibi_dsp.csv', na.strings=c("","NA"))
+colnames(full_meta)[2] = "run"
+colnames(full_meta)[3] = "fov"
+
+##
+perc_ann = mibidf %>% group_by(fov, run, annV1) %>% 
+  summarise(n = n()) %>%
+  mutate(freq = n / sum(n))
+perc_ann = left_join(perc_ann, full_meta, by = c('fov', 'run'))
+perc_ann$X.x <- NULL
+perc_ann$X.y <- NULL
+# add more meta info
+perc_ann$tissue = str_sub(perc_ann$run, -7,-6)
+perc_ann$treatment = str_sub(perc_ann$tissue, -3,-2)
+# other immune in small intestine
+# mph and monocyte into myeloid
+perc_ann$annV1[perc_ann$annV1 == "Macrophage"] <- "Myeloid"
+perc_ann$annV1[perc_ann$annV1 == "Monocyte"] <- "Myeloid"
+perc_ann_my_lg = subset(perc_ann, (perc_ann$location == 'Large' & perc_ann$annV1 == 'Myeloid'))
+perc_ann_my_lg = perc_ann_my_lg[!is.na(perc_ann_my_lg$DSP_Ecad_name),]
+perc_ann_my_lg_top = perc_ann_my_lg[order(perc_ann_my_lg$freq, decreasing = T)[1:15],] # tried 20 then 15
+perc_ann_my_lg_top$regid = paste0(perc_ann_my_lg_top$run, '_', perc_ann_my_lg_top$fov)
+##
+
+mibidfv2 = left_join(mibidf, full_meta, by = c('fov', 'run'))
+mibidfv2$regid = paste0(mibidfv2$run, '_', mibidfv2$fov)
+mibidfv2$treat = str_sub(mibidfv2$tissueID,1,1)
+mibidfv2$stat = 'No'
+mibidfv2$stat[mibidfv2$regid %in% perc_ann_my_lg_top$regid] = 'Yes'
+mibidfv2$data_index = as.numeric(rownames(mibidfv2))
+mibidfv2$regnum = (with(mibidfv2, match(regid, unique(regid))))
+mibidfv2$redid2 = paste0(mibidfv2$regnum, '_',mibidfv2$stat)
+```
+
+
+#### calculate colitis version?
+
+```{r}
+##
+cc2use = mibidfv2[,c('x', 'y', 'redid2', 'annV1', 'treat', 'location', 'data_index')]
+cc2use$annV1 = as.character(cc2use$annV1)
+cc2use$x = as.integer(cc2use$x * 100)
+cc2use$y = as.integer(cc2use$y * 100)
+cc2use = subset(cc2use, cc2use$location == 'Large')
+
+##
+#temp = subset(cc2use, cc2use$treat == 'T')
+
+## run actual value
+tri_dist_celltype <- get_triangulation_distances(df_input = cc2use,
+                                                 id = "data_index",
+                                                 x_pos = "x",
+                                                 y_pos = "y",
+                                                 cell_type = "annV1",
+                                                 region = "redid2",
+                                                 num_cores = 10)
+
+tri_dist_iteration_celltype <- iterate_triangulation_distance(df_input = cc2use,
+                                                                id = "data_index",
+                                                                x_pos = "x",
+                                                                y_pos = "y",
+                                                                cell_type = "annV1",
+                                                                region = "redid2",
+                                                                num_iterations = 100,
+                                                                num_cores = 10)
+
+```
+
+
+```{r}
+distance_threshold = 128 * 100 # corresponds to 50um
+
+tri_dist_iteration_celltype$group = gsub(".*_", "", tri_dist_iteration_celltype$redid2)
+tri_dist_celltype$group = gsub(".*_", "", tri_dist_celltype$redid2)
+
+# Reformat observed dataset
+ggdf_observed_celltype <- tri_dist_celltype %>%
+  dplyr::filter(distance <= distance_threshold) %>%
+  # Calculate observed mean distance and list values
+  dplyr::group_by(celltype1, celltype2, group) %>%
+  summarize(observed = list(distance),
+            observed_mean = mean(unlist(observed), na.rm = TRUE)) %>%
+  ungroup()
+# reformat iteration bg dataset
+ggdf_expected_celltype <- tri_dist_iteration_celltype %>%
+  gather(key = "iteration", value = "mean_distance", -c(celltype1, celltype2, redid2))
+ggdf_expected_celltype <- ggdf_expected_celltype %>% 
+  mutate( group = gsub(".*_", "", redid2) ) %>%
+  # Calculate expected mean distance and list values
+  group_by(celltype1, celltype2, group)
+ggdf_expected_celltype$mean_distance = as.numeric(ggdf_expected_celltype$mean_distance) # NA exist but is taken care of 
+ggdf_expected_celltype <- ggdf_expected_celltype %>%  
+  summarize(expected = list(mean_distance),
+            expected_mean = mean(mean_distance, na.rm = TRUE)) %>%
+  ungroup() 
+# Calculate pvalues
+ggdf_pvals_celltypes <- ggdf_expected_celltype %>%
+  left_join(ggdf_observed_celltype,
+            by = c("celltype1", "celltype2", "group")) %>%
+  # Calculate wilcoxon test between observed and expected distances
+  group_by(celltype1, celltype2, group) %>%
+  mutate(pvalue = wilcox.test(unlist(expected), unlist(observed), exact = FALSE)$p.value) %>%
+  ungroup() %>%
+  select(-observed, -expected)
+# Calculate log fold enrichment
+ggdf <- ggdf_pvals_celltypes %>%
+  # Calculate log fold enrichment
+  mutate(logfold_group = log2(observed_mean/expected_mean),
+         interaction = paste0(celltype1, " --> ", celltype2)) %>%
+  # Filter out pvalues less than 0.05
+  dplyr::filter(pvalue < 0.05)
+```
+
+
+```{r}
+ggdf2 = subset(ggdf, ggdf$celltype1 == "Macrophage" | ggdf$celltype2 == "Macrophage" |
+                 ggdf$celltype1 == "Monocyte" | ggdf$celltype2 == "Monocyte")
+# 
+# Assign cell type colors
+ggdf3 <- ggdf2 %>%
+  select(interaction, group, logfold_group) %>%
+  spread(key = group, value = logfold_group) %>%
+  mutate(difference = (Yes - No)) %>%
+  dplyr::filter(!is.na(difference)) %>%
+  arrange(No)
+ord_diff = ggdf3$interaction
+# Assign interaction order
+ggdf2$interaction <- factor(ggdf2$interaction,
+                            levels = ord_diff)
+# Assign group factor
+ggdf2$group <- factor(ggdf2$group,
+                      levels = c("Yes", "No"))
+### make dumb bell plots
+p = ggplot(data = ggdf2 %>%
+         dplyr::filter(!is.na(interaction))) +
+  #geom_vline(mapping = aes(xintercept = 0), linetype = "dashed") +
+  geom_line(mapping = aes(x = logfold_group, y = interaction),
+            na.rm = TRUE) +
+  geom_point(mapping = aes(x = logfold_group, y = interaction, fill = group), 
+             size = 6, shape = 22, stroke = 0.5, na.rm = TRUE) +
+  scale_fill_manual(values=c('#cf4528',"#00966d")) +
+  theme_bw()+
+  theme(panel.grid.major.x = element_blank(),
+        panel.grid.minor.x = element_blank())
+ggsave('../../plots/macro_mono_inter_v2.svg', height = 4, width = 7)
+p
+```
+
