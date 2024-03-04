@@ -10,7 +10,7 @@ The following is an overview of the code in this repository. Please note that si
 
 | File Name | Description |
 | :---------- | :---------- |
-| fig2_related | Archived code related to designing 16s probes. Full package [here](https://github.com/BokaiZhu/microbiomeFISH).   |
+| fig2_related | Archived code related to designing 16s probes. Separate package github [here](https://github.com/BokaiZhu/microbiomeFISH).   |
 | fig3_related | Archived code for Figure 3 (and related supp. figures) in manuscript (MIBI-related).            |
 | fig4_related | Archived code for Figure 4 (and related supp. figures) in manuscript (GeoMx-DSP-related).           |
 | fig5_related | Archived code for Figure 5 (and related supp. figures) in manuscript (MALDI-related). |
