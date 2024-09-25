@@ -8,7 +8,7 @@ The intricate and dynamic interactions between the host immune system and its mi
 
 ## Overview of code
 
-The following is an overview of the code in this repository. Please note that since this repository doesn't contain the necessary data that was used for the analysis, if one wishes to reproduce the result, one will need to download the data and change the file path accordingly in the code. Relevant data will be made public shortly via Zenedo.
+The following is an overview of the code in this repository (under ```\src\``` folder). Please note that since this repository doesn't contain the necessary data that was used for the analysis, if one wishes to reproduce the result, one will need to download the data and change the file path accordingly in the code. Relevant data will be made public shortly via Zenedo.
 
 | File Name | Description |
 | :---------- | :---------- |
